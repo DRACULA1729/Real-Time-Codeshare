@@ -1,0 +1,18 @@
+{
+  "name": "realtime-codeshare",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "codemirror": "^5.65.19",
+    "y-codemirror": "^3.0.1",
+    "y-websocket": "^3.0.0",
+    "yjs": "^13.6.27"
+  }
+}

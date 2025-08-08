@@ -1,0 +1,88 @@
+/* Reset & Base */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: #1e1e2f;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #e0e0e0;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    padding: 40px 20px;
+}
+
+/* Container */
+.container {
+    width: 100%;
+    max-width: 960px;
+    margin: auto;
+    padding: 20px;
+    background: #2b2b3d;
+    border-radius: 16px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+/* Title */
+.title {
+    text-align: center;
+    font-size: 28px;
+    margin-bottom: 30px;
+    color: #ffffff;
+    letter-spacing: 1px;
+}
+
+/* CodeMirror Editor */
+#editorWrapper {
+    margin-bottom: 30px;
+}
+
+.CodeMirror {
+    height: 450px;
+    border: 1px solid #444;
+    font-size: 15px;
+    border-radius: 8px;
+    background-color: #1e1e2f;
+    color: #f8f8f2;
+}
+
+/* CodeMirror Scrollbar */
+.CodeMirror-scrollbar-filler,
+.CodeMirror-gutter-filler {
+    background: #1e1e2f;
+}
+
+/* User List */
+.user-list {
+    background-color: #242434;
+    border: 1px solid #444;
+    padding: 15px;
+    border-radius: 10px;
+}
+
+.user-list strong {
+    display: block;
+    margin-bottom: 10px;
+    font-size: 16px;
+    color: #fff;
+}
+
+#usersOnlineList {
+    list-style: none;
+    padding-left: 15px;
+}
+
+#usersOnlineList li {
+    margin-bottom: 6px;
+    font-family: monospace;
+    color: #9ae3f9;
+}
+
+/* Remote Cursor (Dynamic Styles Injected) */
+[class^="remote-cursor-"] {
+    pointer-events: none;
+}

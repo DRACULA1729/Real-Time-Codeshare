@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Ghost CodeShare</title>
+
+    <!-- CodeMirror CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css" />
+
+    <!-- Custom CSS -->
+    <style>
+        /* Reset & Base */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: #1e1e2f;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #e0e0e0;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    padding: 40px 20px;
+}
+
+/* Container */
+.container {
+    width: 100%;
+    max-width: 960px;
+    margin: auto;
+    padding: 20px;
+    background: #2b2b3d;
+    border-radius: 16px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+/* Title */
+.title {
+    text-align: center;
+    font-size: 28px;
+    margin-bottom: 30px;
+    color: #ffffff;
+    letter-spacing: 1px;
+}
+
+/* CodeMirror Editor */
+#editorWrapper {
+    margin-bottom: 30px;
+}
+
+.CodeMirror {
+    height: 450px;
+    border: 1px solid #444;
+    font-size: 15px;
+    border-radius: 8px;
+    background-color: #1e1e2f;
+    color: #f8f8f2;
+}
+
+/* CodeMirror Scrollbar */
+.CodeMirror-scrollbar-filler,
+.CodeMirror-gutter-filler {
+    background: #1e1e2f;
+}
+
+/* User List */
+.user-list {
+    background-color: #242434;
+    border: 1px solid #444;
+    padding: 15px;
+    border-radius: 10px;
+}
+
+.user-list strong {
+    display: block;
+    margin-bottom: 10px;
+    font-size: 16px;
+    color: #fff;
+}
+
+#usersOnlineList {
+    list-style: none;
+    padding-left: 15px;
+}
+
+#usersOnlineList li {
+    margin-bottom: 6px;
+    font-family: monospace;
+    color: #9ae3f9;
+}
+
+/* Remote Cursor (Dynamic Styles Injected) */
+[class^="remote-cursor-"] {
+    pointer-events: none;
+}
+
+
+
+
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2 class="title">Ghost CodeShare</h2>
+
+    <!-- Code Editor Area -->
+    <div id="editorWrapper">
+        <textarea id="editor"></textarea>
+    </div>
+
+    <!-- User activity -->
+    <div class="user-list" id="userStatus">
+        <strong>Users Online:</strong>
+        <ul id="usersOnlineList"></ul>
+    </div>
+</div>
+
+<!-- Dependencies -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/clike/clike.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+
+<!-- External Logic -->
+<script>
+    // === Editor Setup ===
+    const editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
+        mode: "text/x-java",
+        lineNumbers: true,
+        lineWrapping: true
+    });
+
+    const sessionId = "alpha123";
+    const userName = prompt("Enter your name") || "Anonymous";
+    const socket = new SockJS("/ws");
+    const stompClient = Stomp.over(socket);
+
+    const userColors = {};
+    const remoteCursors = {};
+
+    function assignColor(user) {
+        if (!userColors[user]) {
+            const colors = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4"];
+            userColors[user] = colors[Object.keys(userColors).length % colors.length];
+            injectCursorStyle(user, userColors[user]);
+        }
+        return userColors[user];
+    }
+
+    function injectCursorStyle(user, color) {
+        const style = document.createElement("style");
+        style.innerHTML = `
+            .remote-cursor-${user} {
+                border-left: 2px solid ${color};
+                margin-left: -1px;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    stompClient.connect({}, function () {
+        // Code changes
+        stompClient.subscribe(`/topic/session/${sessionId}/code`, function (message) {
+            const payload = JSON.parse(message.body);
+          if (payload.userName !== userName) {
+            const current = editor.getValue();
+            if (current !== payload.content) {
+                const cursor = editor.getCursor();
+                editor.setValue(payload.content);
+                editor.setCursor(cursor); // restore cursor
+    }
+}
+
+        });
+
+        // Cursor updates
+        stompClient.subscribe(`/topic/session/${sessionId}/cursor`, function (message) {
+            const payload = JSON.parse(message.body);
+            if (payload.userName !== userName) {
+                const color = assignColor(payload.userName);
+
+                if (remoteCursors[payload.userName]) {
+                    remoteCursors[payload.userName].clear();
+                }
+
+                const cursorPos = payload.position;
+                const marker = editor.markText(cursorPos, cursorPos, {
+                    className: `remote-cursor-${payload.userName}`,
+                    title: payload.userName
+                });
+
+                remoteCursors[payload.userName] = marker;
+            }
+        });
+
+        // First push
+        stompClient.send("/app/editor/update", {}, JSON.stringify({
+            sessionId: sessionId,
+            userName: userName,
+            content: editor.getValue()
+        }));
+    });
+
+    let codeUpdateTimeout;
+    editor.on("change", function () {
+        clearTimeout(codeUpdateTimeout);
+        codeUpdateTimeout = setTimeout(() => {
+            const updatedCode = editor.getValue();
+            stompClient.send("/app/editor/update", {}, JSON.stringify({
+                sessionId: sessionId,
+                userName: userName,
+                content: updatedCode
+            }));
+        }, 500);
+    });
+
+    editor.on("cursorActivity", function () {
+        const cursorPos = editor.getCursor();
+        stompClient.send("/app/editor/cursor", {}, JSON.stringify({
+            sessionId: sessionId,
+            userName: userName,
+            position: cursorPos
+        }));
+    });
+
+
+</script>
+</body>
+</html>
