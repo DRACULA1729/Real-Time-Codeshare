@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Ghost CodeShare (OT)</title>
+
+    <!-- CodeMirror CSS -->
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css" />
+
+    <!-- Our Styles -->
+    <link rel="stylesheet" href="/css/style.css"/>
+</head>
+<body>
+<div id="topbar">
+    <h1>Collab CodeShare (OT Version)</h1>
+    <div id="sessionInfo"></div>
+</div>
+
+<textarea id="editor"></textarea>
+
+<div class="user-list" id="userStatus">
+    <strong>Users Online:</strong>
+    <div id="usersOnlineList"></div>
+</div>
+
+<!-- Dependencies: CodeMirror -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/clike/clike.min.js"></script>
+
+<!-- SockJS + STOMP -->
+<script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+
+<!-- Our App Logic -->
+<script src="/js/codeshare.js"></script>
+
+</body>
+</html>

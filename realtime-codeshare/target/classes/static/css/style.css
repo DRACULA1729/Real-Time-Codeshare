@@ -1,0 +1,135 @@
+/* Reset and Base Styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+    overflow: hidden;
+}
+
+/* Top Bar */
+#topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: linear-gradient(90deg, #4f46e5, #6d28d9);
+    padding: 10px 20px;
+    position: fixed;
+    top: 0;
+    width: 100%;
+    height: 50px;
+    color: white;
+    z-index: 1000;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+#topbar h1 {
+    font-size: 1rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+#sessionInfo {
+    font-size: 0.85rem;
+    opacity: 0.9;
+    text-align: right;
+}
+
+/* CodeMirror Editor */
+.CodeMirror {
+    position: absolute;
+    top: 50px; /* below topbar */
+    bottom: 50px; /* above user list */
+    left: 0;
+    right: 0;
+    font-size: 14px;
+    background-color: #1e1e1e;
+    color: #f8f8f2;
+}
+
+/* Scrollbars for CodeMirror */
+.CodeMirror-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #6d28d9 #2d2d2d;
+}
+
+.CodeMirror-scroll::-webkit-scrollbar {
+    width: 8px;
+}
+
+.CodeMirror-scroll::-webkit-scrollbar-track {
+    background: #2d2d2d;
+}
+
+.CodeMirror-scroll::-webkit-scrollbar-thumb {
+    background-color: #6d28d9;
+    border-radius: 4px;
+}
+
+/* User List */
+.user-list {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background: #111;
+    padding: 8px 20px;
+    border-top: 1px solid #333;
+    font-size: 0.9rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.user-list strong {
+    margin-right: 10px;
+    font-weight: 600;
+    color: #ffffff;
+}
+
+.user-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #fff;
+    white-space: nowrap;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    transition: transform 0.2s ease;
+}
+
+.user-badge:hover {
+    transform: scale(1.05);
+}
+
+/* Responsive Layout */
+@media (max-width: 600px) {
+    #topbar {
+        flex-direction: column;
+        height: auto;
+        padding: 8px 12px;
+        align-items: flex-start;
+    }
+
+    #topbar h1 {
+        font-size: 0.95rem;
+        margin-bottom: 4px;
+    }
+
+    #sessionInfo {
+        font-size: 0.8rem;
+    }
+
+    .CodeMirror {
+        top: 70px;
+        bottom: 60px;
+    }
+}
