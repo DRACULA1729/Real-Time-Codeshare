@@ -3,7 +3,15 @@ console.log("codeshare (OT client) booting...");
 
 const WS_BASE = "ws://localhost:8080/ws/ot?sessionId=";
 const sessionId = prompt("Enter session id (e.g., alpha123)") || "alpha123";
+const userName =prompt("Enter your pseudo name (e.g. Ghost)") || "Anonymous";
 const clientId = "client-" + Math.floor(Math.random() * 100000);
+// Show session info on topbar
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById('sessionId').innerText = sessionId;
+  document.getElementById('userName').innerText = clientId;
+  document.getElementById('sessionInfo').innerText = `Session: ${sessionId}  Name: ${userName}  ${clientId}`;
+});
+
 let baseVersion = 0;
 const pendingOps = []; // FIFO pending ops
 
@@ -14,7 +22,6 @@ const editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
   lineWrapping: true,
   autofocus: true
 });
-document.getElementById('sessionInfo').innerText = `Session: ${sessionId} — You: ${clientId}`;
 
 let suppress = false;
 function runWithoutSending(fn) {
@@ -225,3 +232,138 @@ editor.on("beforeChange", (cm, change) => {
     }
   }
 });
+// ---------- Helpers for language ext detection (reuse existing mode logic) ----------
+function detectExtension() {
+  const mode = (editor.getOption("mode") || "").toLowerCase();
+  switch (mode) {
+    case "text/x-java": return "java";
+    case "javascript":
+    case "text/javascript": return "js";
+    case "python":
+    case "text/x-python": return "py";
+    case "text/x-csrc": return "c";
+    case "text/x-c++src": return "cpp";
+    case "text/html": return "html";
+    case "text/css": return "css";
+    case "text/x-sql": return "sql";
+    default: return "txt";
+  }
+}
+
+// ---------- UI wiring ----------
+const filenameInput = document.getElementById("filenameInput");
+const downloadMainBtn = document.getElementById("downloadMainBtn");
+const downloadMenuBtn = document.getElementById("downloadMenuBtn");
+const downloadMenu = document.getElementById("downloadMenu");
+const downloadExtDisplay = document.getElementById("downloadExtDisplay");
+
+// initialize ext display
+downloadExtDisplay.innerText = detectExtension();
+
+// toggle menu
+downloadMenuBtn.addEventListener("click", () => {
+  downloadMenu.style.display = downloadMenu.style.display === "none" ? "block" : "none";
+});
+
+// update ext display on mode change (if you change editor mode dynamically)
+editor.on("optionChange", (cm, option) => {
+  if (option === "mode") downloadExtDisplay.innerText = detectExtension();
+});
+
+// menu option clicks
+downloadMenu.querySelectorAll(".download-option").forEach(opt => {
+  opt.addEventListener("click", () => {
+    const mode = opt.getAttribute("data-mode"); // "raw" or "zip"
+    handleDownloadChoice(mode);
+    downloadMenu.style.display = "none";
+  });
+});
+
+// main button = raw download by default
+downloadMainBtn.addEventListener("click", () => handleDownloadChoice("raw"));
+
+// ---------- download handlers ----------
+function filenameOrDefault() {
+  const ext = detectExtension();
+  const raw = (filenameInput.value || "").trim();
+  if (!raw) return `${sessionId || "code"}.${ext}`;
+  // add extension if user hasn't
+  if (!raw.includes(".")) return `${raw}.${ext}`;
+  return raw;
+}
+
+// Raw download (client-only)
+function downloadRaw(filename) {
+  const code = editor.getValue();
+  const blob = new Blob([code], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
+
+// Zip download (client-side, includes metadata.json)
+async function downloadZip(filenameBase) {
+  const code = editor.getValue();
+  const ext = detectExtension();
+  const filename = filenameBase.endsWith(`.${ext}`) ? filenameBase : `${filenameBase}.${ext}`;
+
+  const meta = {
+    sessionId,
+    filename,
+    version: baseVersion,
+    clientId,
+    timestamp: new Date().toISOString()
+    // optionally: participants list if you maintain it in client
+  };
+
+  const zip = new JSZip();
+  zip.file(filename, code);
+  zip.file("metadata.json", JSON.stringify(meta, null, 2));
+
+  const content = await zip.generateAsync({ type: "blob" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(content);
+  a.download = (filenameBase.endsWith(".zip") ? filenameBase : `${filenameBase}.zip`);
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
+
+// route handler
+function handleDownloadChoice(mode) {
+  const input = filenameInput.value.trim();
+  const defaultName = (input && input.length > 0) ? input : sessionId || "code";
+  if (mode === "raw") {
+    downloadRaw(defaultName.includes(".") ? defaultName : `${defaultName}.${detectExtension()}`);
+  } else {
+    downloadZip(defaultName);
+  }
+}
+
+async function pushToGitHub() {
+  const owner = prompt("GitHub owner/org:");
+  const repo = prompt("Repo name:");
+  const path = prompt("File path (e.g. src/Main.java):", `${sessionId}.${detectExtension()}`);
+  const message = prompt("Commit message:", "Commit from Ghost CodeShare");
+  const token = prompt("Personal Access Token (has repo:contents permissions):");
+
+  if (!owner || !repo || !path || !token) return alert("Missing fields");
+
+  const payload = { token, owner, repo, path, message, sessionId };
+  const resp = await fetch("/api/github/push", {
+    method: "POST",
+    headers: { "Content-Type":"application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const txt = await resp.text();
+  if (resp.ok) alert("Pushed to GitHub — response: " + txt);
+  else alert("GitHub push failed: " + txt);
+}
+
+document.getElementById("githubPushBtn").addEventListener("click", pushToGitHub);
