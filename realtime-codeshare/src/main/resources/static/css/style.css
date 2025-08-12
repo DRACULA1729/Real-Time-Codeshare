@@ -8,7 +8,7 @@
 html, body {
     height: 100%;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background-color: #1e1e1e;
+    background-color: #fcfafa;
     color: #e0e0e0;
     overflow: hidden;
 }
@@ -24,15 +24,16 @@ html, body {
     top: 0;
     width: 100%;
     height: 50px;
-    color: white;
+    color: rgb(248, 231, 231);
     z-index: 1000;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
 
 #topbar h1 {
-    font-size: 1rem;
-    font-weight: 600;
+    font-size: 1.5rem;
+    font-weight: 800;
     white-space: nowrap;
+
 }
 
 #sessionInfo {
@@ -49,7 +50,7 @@ html, body {
     left: 0;
     right: 0;
     font-size: 14px;
-    background-color: #1e1e1e;
+    background-color: #1e1e2e;
     color: #f8f8f2;
 }
 
@@ -64,7 +65,7 @@ html, body {
 }
 
 .CodeMirror-scroll::-webkit-scrollbar-track {
-    background: #2d2d2d;
+    background: #f1efef;
 }
 
 .CodeMirror-scroll::-webkit-scrollbar-thumb {
@@ -108,6 +109,97 @@ html, body {
 
 .user-badge:hover {
     transform: scale(1.05);
+}
+
+.action-buttons-collapsible {
+  position: fixed;
+  top: 70px;
+  right: 15px;
+  width: 50px;  /* small width when collapsed */
+  background: #2d2d2d;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  overflow: hidden;
+  transition: width 0.3s ease;
+  z-index: 1000;
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.action-buttons-collapsible.expanded {
+  width: 200px;  /* expanded width */
+  padding: 10px;
+  align-items: stretch;
+}
+
+#toggleActionsBtn {
+  background: #007acc;
+  color: white;
+  border: none;
+  font-size: 20px;
+  padding: 10px 0;
+  cursor: pointer;
+  width: 100%;
+  border-radius: 6px;
+  outline: none;
+}
+
+.action-buttons-content {
+  display: none;
+  margin-top: 10px;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.action-buttons-collapsible.expanded .action-buttons-content {
+  display: flex;
+}
+
+.action-buttons-content input,
+.action-buttons-content button {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 4px;
+  border: none;
+  padding: 8px;
+  font-size: 14px;
+  background-color: #3a3a3a;
+  color: white;
+  cursor: pointer;
+  transition: background-color 0.2s ease-in-out;
+}
+
+.action-buttons-content button:hover {
+  background-color: #005fa3;
+}
+
+/* Dropdown menu styles stay the same */
+.dropdown {
+  position: relative;
+}
+
+#downloadMenu {
+  display: none;
+  position: absolute;
+  top: 38px;
+  left: 0;
+  background: #2d2d2d;
+  border: 1px solid #444;
+  padding: 6px;
+  border-radius: 4px;
+  z-index: 1100;
+}
+
+.download-option {
+  padding: 5px;
+  cursor: pointer;
+  color: #eaeaea;
+}
+
+.download-option:hover {
+  background-color: #444;
 }
 
 /* Responsive Layout */
