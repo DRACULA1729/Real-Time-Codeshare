@@ -4,36 +4,114 @@
     <meta charset="UTF-8" />
     <title>Ghost CodeShare (OT)</title>
 
-    <!-- CodeMirror CSS -->
-    <link rel="stylesheet"
-          href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css" />
-
+    <!-- CodeMirror Base CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
     <!-- Our Styles -->
-    <link rel="stylesheet" href="/css/style.css"/>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- CodeMirror Theme -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/dracula.min.css">
+    
+
+    <style>
+        /* Ensure the editor is visible and styled */
+        #editor {
+          height: 400px;
+        }
+        .CodeMirror {
+          height: 100%;
+          font-size: 16px;
+        }
+        body {
+          background-color: #1e1e1e;
+          color: #f8f8f2;
+          font-family: sans-serif;
+          margin: 0;
+          padding: 0;
+        }
+        #topbar {
+          background: #282a36;
+          padding: 10px;
+          color: #f8f8f2;
+        }
+        .action-buttons-collapsible {
+          margin: 20px;
+        }
+    </style>
+
 </head>
 <body>
 <div id="topbar">
     <h1>Collab CodeShare (OT Version)</h1>
+    <span id="sessionId" style="display: none;"></span>
+    <span id="userName" style="display: none;"></span>
     <div id="sessionInfo"></div>
+
 </div>
 
-<textarea id="editor"></textarea>
+<textarea id="editor"># Write your code here...</textarea>
 
 <div class="user-list" id="userStatus">
     <strong>Users Online:</strong>
     <div id="usersOnlineList"></div>
 </div>
 
-<!-- Dependencies: CodeMirror -->
+
+<!-- Download UI -->
+<div class="action-buttons-collapsible">
+    <button id="toggleActionsBtn" title="Toggle Actions">☰</button>
+    <div class="action-buttons-content">
+        <input id="filenameInput" placeholder="filename" />
+
+        <div class="dropdown">
+            <button id="downloadMainBtn">Download</button>
+            <button id="downloadMenuBtn">▾</button>
+            <div id="downloadMenu">
+                <div class="download-option" data-mode="raw">
+                    Download as <span id="downloadExtDisplay">java</span>
+                </div>
+                <div class="download-option" data-mode="zip">
+                    Download as .zip (with metadata)
+                </div>
+            </div>
+        </div>
+
+        <button id="snapshotBtn">Save Snapshot</button>
+        <button id="snapListBtn">Snapshots</button>
+        <button id="githubPushBtn">Push to GitHub</button>
+    </div>
+</div>
+
+<!-- JSZip CDN (for client-side zip) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.0/jszip.min.js"></script>
+
+<!-- CodeMirror Dependencies -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/clike/clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/python/python.min.js"></script>
 
 <!-- SockJS + STOMP -->
 <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
 
+
+
+<!-- UI Toggle Script -->
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const toggleBtn = document.getElementById('toggleActionsBtn');
+      const panel = document.querySelector('.action-buttons-collapsible');
+      toggleBtn.addEventListener('click', () => {
+        panel.classList.toggle('expanded');
+      });
+
+      // Initialize CodeMirror
+      var editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
+        lineNumbers: true,
+        mode: "python",
+        theme: "dracula"
+      });
+    });
+</script>
 <!-- Our App Logic -->
 <script src="/js/codeshare.js"></script>
-
 </body>
 </html>
