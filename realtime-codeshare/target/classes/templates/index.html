@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Ghost CodeShare (OT)</title>
+
+    <!-- CodeMirror Base CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
+    <!-- Our Styles -->
+    <link rel="stylesheet" href="css/style.css">
+    <!-- CodeMirror Dracula Theme -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/dracula.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+    <style>
+        #editor { height: 400px; }
+        .CodeMirror { height: 100%; font-size: 16px; }
+        body { background-color: #1e1e1e; color: #f8f8f2; font-family: sans-serif; margin: 0; padding: 0; }
+        #topbar { background: #282a36; padding: 10px; color: #f8f8f2; }
+        .action-buttons-collapsible { margin: 20px; }
+    </style>
+</head>
+<body>
+<div id="topbar">
+    <h1>Collab CodeShare (OT Version)</h1>
+    <span id="sessionId" style="display: none;"></span>
+    <span id="userName" style="display: none;"></span>
+    <div id="sessionInfo"></div>
+</div>
+<div id="lang-label" style="color: #ccc; font-family: monospace; margin-bottom: 5px;">
+    Detected: <span id="lang-name">plaintext</span>
+</div>
+<textarea id="editor"># Write your code here...</textarea>
+<div class="user-list" id="userStatus">
+    <strong>Users Online:</strong>
+    <div id="usersOnlineList"></div>
+</div>
+
+<div class="action-buttons-collapsible">
+    <button id="toggleActionsBtn" title="Toggle Actions">☰</button>
+    <div class="action-buttons-content">
+        <input id="filenameInput" placeholder="filename" />
+        <div class="dropdown">
+            <div class="download-menu">
+                <button id="downloadMainBtn">Download Code</button>
+                <button id="downloadMenuBtn">Download options</button>
+                <div id="downloadMenu">
+                    <div class="download-option" data-mode="raw">
+                        Download as <span id="download-ext-display"></span>
+                    </div>
+                    <div class="download-option" data-mode="zip">
+                        Download as .zip (with metadata)
+                    </div>
+                </div>
+            </div>
+        </div>
+<!--        <button id="runCodeBtn">Run Code</button>-->
+        <button id="githubPushBtn">Push to GitHub</button>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.0/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/python/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/meta.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const toggleBtn = document.getElementById('toggleActionsBtn');
+        const panel = document.querySelector('.action-buttons-collapsible');
+        toggleBtn.addEventListener('click', () => panel.classList.toggle('expanded'));
+
+        var editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
+            lineNumbers: true,
+            mode: "python",
+            theme: "dracula"
+        });
+
+        function detectAndSetMode() {
+            let code = editor.getValue();
+            if (!code.trim()) return;
+            let detection = hljs.highlightAuto(code);
+            document.getElementById("lang-name").textContent = detection.language || "unknown";
+            let modeInfo = CodeMirror.findModeByName(detection.language);
+            if (modeInfo) {
+                let modeName = modeInfo.mode;
+                let script = document.createElement("script");
+                script.src = `https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/${modeName}/${modeName}.min.js`;
+                script.onload = () => editor.setOption("mode", modeName);
+                document.head.appendChild(script);
+            }
+        }
+
+        editor.on("change", () => {
+            clearTimeout(window._detectTimer);
+            window._detectTimer = setTimeout(detectAndSetMode, 800);
+        });
+        detectAndSetMode();
+
+        // WebSocket setup
+        const socket = new SockJS('http://localhost:8080/ws/ot?sessionId=');
+        const stompClient = Stomp.over(socket);
+        stompClient.connect({}, frame => {
+            const sessionId = new URLSearchParams(window.location.search).get('sessionId') || 'default';
+            stompClient.subscribe(`/topic/ot/${sessionId}`, message => {
+                const payload = JSON.parse(message.body);
+                if (payload.type === 'op') {
+                    editor.setValue(payload.document || editor.getValue());
+                } else if (payload.type === 'runResult') {
+                    alert(payload.result);
+                }
+            });
+
+            // Send initial document state
+            stompClient.send(`/app/ot/${sessionId}`, {}, JSON.stringify({
+                type: 'init'
+            }));
+        });
+
+        // Run code button
+<!--        document.getElementById('runCodeBtn').addEventListener('click', () => {-->
+<!--            const sessionId = new URLSearchParams(window.location.search).get('sessionId') || 'default';-->
+<!--            stompClient.send(`/app/ot/${sessionId}`, {}, JSON.stringify({-->
+<!--                type: 'saveAndRun'-->
+<!--            }));-->
+<!--        });-->
+    });
+</script>
+<script src="/js/codeshare.js"></script>
+</body>
+</html>
