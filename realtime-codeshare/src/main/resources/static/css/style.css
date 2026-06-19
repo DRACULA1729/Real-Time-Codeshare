@@ -210,6 +210,86 @@ html, body {
   background-color: #444;
 }
 
+/* ============ Gate (create / join / waiting) ============ */
+#gate {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(circle at 30% 20%, #2a2350, #14131f 70%);
+}
+.gate-card {
+    background: #1e1e2e;
+    color: #e0e0e0;
+    padding: 32px 36px;
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    width: min(92vw, 380px);
+}
+.gate-card h1 { font-size: 1.5rem; margin-bottom: 16px; color: #bb9af7; }
+.gate-sub { margin-bottom: 16px; opacity: 0.85; }
+.gate-panel { display: flex; flex-direction: column; gap: 12px; }
+.gate-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; opacity: 0.9; }
+.gate-panel input {
+    padding: 9px 10px; border-radius: 6px; border: 1px solid #3a3a55;
+    background: #15151f; color: #f8f8f2; font-size: 0.95rem;
+}
+.gate-panel input[type="color"] { padding: 2px; height: 38px; }
+button.primary {
+    background: linear-gradient(90deg, #4f46e5, #6d28d9); color: #fff; border: none;
+    padding: 11px; border-radius: 6px; font-size: 1rem; cursor: pointer; margin-top: 4px;
+}
+button.primary:hover { filter: brightness(1.1); }
+.error { color: #f7768e; }
+.muted { opacity: 0.7; font-size: 0.85rem; }
+.spinner {
+    width: 28px; height: 28px; border: 3px solid #3a3a55; border-top-color: #bb9af7;
+    border-radius: 50%; animation: spin 0.9s linear infinite; margin: 4px auto;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ============ Topbar extras ============ */
+#topbar .muted { color: rgba(255,255,255,0.7); }
+button.ghost {
+    background: transparent; border: 1px solid rgba(255,255,255,0.4); color: #fff;
+    padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 0.8rem;
+}
+button.ghost:hover { background: rgba(255,255,255,0.12); }
+
+/* ============ Language label ============ */
+#lang-label {
+    position: fixed; top: 50px; left: 0; right: 0; height: 22px;
+    background: #15151f; color: #9aa; font: 0.78rem monospace; padding: 2px 12px; z-index: 900;
+}
+.CodeMirror { top: 72px; }
+
+/* ============ Presence badges ============ */
+.kick-btn {
+    margin-left: 6px; background: rgba(0,0,0,0.3); color: #fff; border: none;
+    border-radius: 50%; width: 16px; height: 16px; line-height: 14px; cursor: pointer; font-size: 11px;
+}
+
+/* ============ Join-requests panel ============ */
+#joinRequestsPanel {
+    position: fixed; top: 80px; left: 15px; width: 240px; z-index: 1000;
+    background: #1e1e2e; border: 1px solid #3a3a55; border-radius: 8px; padding: 10px;
+    color: #e0e0e0; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+#joinRequestsPanel strong { display: block; margin-bottom: 8px; color: #bb9af7; }
+.join-request { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.join-request span { flex: 1; font-size: 0.9rem; }
+.join-request button { font-size: 0.75rem; padding: 3px 8px; border: none; border-radius: 4px; cursor: pointer; background: #4f46e5; color: #fff; }
+.join-request button.ghost { background: transparent; border: 1px solid #555; }
+
+/* ============ GitHub section ============ */
+#githubSection { border: 1px solid #444; border-radius: 6px; padding: 8px; margin-top: 6px; }
+#githubSection legend { padding: 0 6px; color: #bb9af7; }
+#githubSection .row { display: flex; gap: 6px; margin-bottom: 6px; }
+#githubSection input { flex: 1; min-width: 0; }
+.action-buttons-content .row { display: flex; gap: 6px; }
+
 /* Responsive Layout */
 @media (max-width: 600px) {
     #topbar {

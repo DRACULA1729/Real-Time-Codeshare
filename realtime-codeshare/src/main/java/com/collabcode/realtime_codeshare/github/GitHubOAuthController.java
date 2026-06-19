@@ -30,6 +30,7 @@ public class GitHubOAuthController {
 
     private static final Logger log = LoggerFactory.getLogger(GitHubOAuthController.class);
     private static final String STATE_ATTR = "gh_oauth_state";
+    private static final String RETURN_ATTR = "gh_oauth_return";
 
     private final GitHubProperties props;
     private final GitHubTokenStore tokenStore;
@@ -44,13 +45,19 @@ public class GitHubOAuthController {
     }
 
     @GetMapping("/authorize")
-    public void authorize(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+    public void authorize(@RequestParam(required = false) String returnTo,
+                          HttpServletRequest req, HttpServletResponse resp) throws IOException {
         if (!props.isConfigured()) {
             resp.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GitHub OAuth is not configured");
             return;
         }
         String state = randomState();
-        req.getSession(true).setAttribute(STATE_ATTR, state);
+        HttpSession session = req.getSession(true);
+        session.setAttribute(STATE_ATTR, state);
+        // Only same-origin relative paths are honored, to prevent open redirects.
+        if (returnTo != null && returnTo.startsWith("/") && !returnTo.startsWith("//")) {
+            session.setAttribute(RETURN_ATTR, returnTo);
+        }
         String url = props.getAuthorizeUri()
                 + "?client_id=" + enc(props.getClientId())
                 + "&redirect_uri=" + enc(props.getRedirectUri())
@@ -74,7 +81,12 @@ public class GitHubOAuthController {
         String token = exchangeCodeForToken(code);
         tokenStore.put(session.getId(), token);
         log.info("GitHub account connected for HTTP session {}", session.getId());
-        resp.sendRedirect("/?github=connected");
+
+        Object returnTo = session.getAttribute(RETURN_ATTR);
+        session.removeAttribute(RETURN_ATTR);
+        String dest = returnTo instanceof String s && !s.isBlank() ? s : "/";
+        dest += (dest.contains("?") ? "&" : "?") + "github=connected";
+        resp.sendRedirect(dest);
     }
 
     @GetMapping("/status")
