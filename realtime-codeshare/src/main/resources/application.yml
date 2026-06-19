@@ -8,8 +8,13 @@ spring:
     suffix: .html
 
 codeshare:
+  # Comma-separated allowed Origin(s) for the WS upgrade. Add https origins for prod.
+  allowed-origins: ${CODESHARE_ALLOWED_ORIGINS:http://localhost:8080}
+  session:
+    max-rejected-attempts: 3    # rejected joins per identity before a temporary block
+    ttl-minutes: 30
   room:
-    idle-ttl-ms: 1800000        # evict empty rooms idle longer than 30 min
+    idle-ttl-ms: 1800000        # reclaim empty rooms idle longer than 30 min
   reaper:
     interval-ms: 60000          # idle-room sweep cadence
   rate:

@@ -1,8 +1,11 @@
 package com.collabcode.realtime_codeshare.controller;
 
+import com.collabcode.realtime_codeshare.model.User;
 import com.collabcode.realtime_codeshare.ot.InvalidOpException;
 import com.collabcode.realtime_codeshare.ot.OTService;
 import com.collabcode.realtime_codeshare.ratelimit.TokenBucket;
+import com.collabcode.realtime_codeshare.security.Role;
+import com.collabcode.realtime_codeshare.service.SessionService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -16,109 +19,146 @@ import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorato
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
-import java.net.URI;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Meet-style gateway over the OT engine. The handshake interceptor has already
+ * validated the session id; this handler enforces admission (creator/approved
+ * tokens edit immediately, new joiners wait in a room for host approval),
+ * relays ops/cursors only for admitted clients, services admin actions, and
+ * transfers admin when the host leaves.
+ */
 @Component
 public class OTWebSocketHandler extends TextWebSocketHandler {
 
     private static final Logger log = LoggerFactory.getLogger(OTWebSocketHandler.class);
 
-    /** Per-session send serialization limits for ConcurrentWebSocketSessionDecorator. */
     private static final int SEND_TIME_LIMIT_MS = 10_000;
     private static final int SEND_BUFFER_BYTES = 512 * 1024;
 
-    // WS-session attribute keys.
-    static final String ATTR_SESSION_ID = "sessionId";
+    // WS-session attribute keys (sessionId/token/clientId/name/color seeded by the interceptor).
+    private static final String ATTR_SESSION_ID = "sessionId";
+    private static final String ATTR_TOKEN = "token";
     private static final String ATTR_CLIENT_ID = "clientId";
+    private static final String ATTR_NAME = "name";
+    private static final String ATTR_COLOR = "color";
+    private static final String ATTR_ROLE = "role";
+    private static final String ATTR_JOIN_KEY = "joinKey";
+    private static final String ATTR_ADMITTED = "admitted";
     private static final String ATTR_BUCKET = "bucket";
 
     private final OTService otService;
+    private final SessionService sessionService;
     private final ObjectMapper mapper = new ObjectMapper();
     private final int opsPerSec;
 
-    // sessionId -> (wsSessionId -> decorated session). Keying by ws id is identity-safe
-    // across raw vs decorated sessions and makes add/remove O(1).
+    // sessionId -> (wsId -> decorated socket). Admitted clients only.
     private final Map<String, Map<String, WebSocketSession>> roomClients = new ConcurrentHashMap<>();
+    // sessionId -> (wsId -> decorated socket). Clients awaiting approval.
+    private final Map<String, Map<String, WebSocketSession>> pendingSockets = new ConcurrentHashMap<>();
     // sessionId -> (clientId -> cursor index)
     private final Map<String, Map<String, Integer>> cursorPositions = new ConcurrentHashMap<>();
-    // sessionId -> last activity epoch millis (for the idle reaper)
+    // sessionId -> last activity epoch millis (idle-reaper backstop)
     private final Map<String, Long> lastActivity = new ConcurrentHashMap<>();
 
     public OTWebSocketHandler(OTService otService,
+                              SessionService sessionService,
                               @Value("${codeshare.rate.ops-per-sec:50}") int opsPerSec) {
         this.otService = otService;
+        this.sessionService = sessionService;
         this.opsPerSec = opsPerSec;
     }
 
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        String sessionId = getSessionId(session);
-        if (sessionId == null || sessionId.isBlank()) {
-            log.warn("Rejecting connection {} with no sessionId", session.getId());
-            session.close(CloseStatus.BAD_DATA);
+    public void afterConnectionEstablished(WebSocketSession raw) throws Exception {
+        String sessionId = attr(raw, ATTR_SESSION_ID);
+        if (sessionId == null) { // interceptor should have guaranteed this
+            raw.close(CloseStatus.BAD_DATA);
             return;
         }
+        WebSocketSession session = new ConcurrentWebSocketSessionDecorator(raw, SEND_TIME_LIMIT_MS, SEND_BUFFER_BYTES);
+        raw.getAttributes().put(ATTR_BUCKET, new TokenBucket(opsPerSec));
 
-        // Wrap so concurrent broadcasts to this socket are serialized.
-        WebSocketSession decorated =
-                new ConcurrentWebSocketSessionDecorator(session, SEND_TIME_LIMIT_MS, SEND_BUFFER_BYTES);
-        session.getAttributes().put(ATTR_SESSION_ID, sessionId);
-        session.getAttributes().put(ATTR_BUCKET, new TokenBucket(opsPerSec));
+        String clientId = attr(raw, ATTR_CLIENT_ID);
+        SessionService.JoinResult jr = sessionService.evaluateJoin(
+                sessionId, attr(raw, ATTR_TOKEN), clientId, attr(raw, ATTR_NAME), attr(raw, ATTR_COLOR));
+        raw.getAttributes().put(ATTR_TOKEN, jr.token());           // effective (possibly minted) token
+        raw.getAttributes().put(ATTR_ROLE, jr.role() == null ? Role.JOINER : jr.role());
 
-        roomClients.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>())
-                .put(session.getId(), decorated);
+        switch (jr.outcome()) {
+            case ADMITTED -> admit(session, sessionId);
+            case PENDING -> {
+                raw.getAttributes().put(ATTR_ADMITTED, false);
+                raw.getAttributes().put(ATTR_JOIN_KEY, jr.joinKey());
+                pendingSockets.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>())
+                        .put(raw.getId(), session);
+                touch(sessionId);
+                sendJson(session, Map.of("type", "waitingForApproval", "token", jr.token()));
+                notifyAdminsOfRequest(sessionId, jr.joinKey(), attr(raw, ATTR_NAME), attr(raw, ATTR_COLOR));
+                log.info("Session {}: {} pending approval", sessionId, clientId);
+            }
+            case DENIED -> {
+                sendJson(session, Map.of("type", "joinDenied", "reason", jr.reason() == null ? "denied" : jr.reason()));
+                session.close(CloseStatus.POLICY_VIOLATION);
+                log.info("Session {}: denied join ({})", sessionId, jr.reason());
+            }
+        }
+    }
+
+    /** Admit an already-decided socket: register it, send init, refresh presence. */
+    private void admit(WebSocketSession session, String sessionId) throws IOException {
+        String token = attr(session, ATTR_TOKEN);
+        session.getAttributes().put(ATTR_ADMITTED, true);
+        roomClients.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>()).put(session.getId(), session);
+        sessionService.markActive(sessionId, token);
         touch(sessionId);
-        log.info("Client {} joined room {}", session.getId(), sessionId);
 
-        Map<String, Object> initPayload = Map.of(
+        sendJson(session, Map.of(
                 "type", "init",
                 "document", otService.getDocument(sessionId),
-                "version", otService.getVersion(sessionId)
-        );
-        decorated.sendMessage(new TextMessage(mapper.writeValueAsString(initPayload)));
+                "version", otService.getVersion(sessionId),
+                "token", token,
+                "role", roleOf(sessionId, token),
+                "clientId", nullSafe(attr(session, ATTR_CLIENT_ID))
+        ));
+        broadcastPresence(sessionId);
+        if (sessionService.isAdmin(sessionId, token)) sendPendingListTo(session, sessionId);
+        log.info("Session {}: admitted {} as {}", sessionId, attr(session, ATTR_CLIENT_ID), roleOf(sessionId, token));
     }
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-        String sessionId = (String) session.getAttributes().get(ATTR_SESSION_ID);
+        String sessionId = attr(session, ATTR_SESSION_ID);
         if (sessionId == null) return;
+        sessionService.touch(sessionId);
         touch(sessionId);
 
-        String payload = message.getPayload();
         JsonNode node;
         try {
-            node = mapper.readTree(payload);
+            node = mapper.readTree(message.getPayload());
         } catch (Exception e) {
             log.warn("[{}] dropping non-JSON message: {}", sessionId, e.getMessage());
             return;
         }
+        String type = node.path("type").asText("").toLowerCase(Locale.ROOT);
+        String token = attr(session, ATTR_TOKEN);
 
-        String type = node.path("type").asText("");
-        String clientId = node.hasNonNull("clientId") ? node.get("clientId").asText() : null;
-        if (clientId != null) session.getAttributes().put(ATTR_CLIENT_ID, clientId);
-
-        switch (type.toLowerCase(Locale.ROOT)) {
-            case "cursor" -> handleCursor(session, sessionId, node, clientId, payload);
-            case "insert", "delete" -> handleOp(session, sessionId, node);
+        switch (type) {
+            case "insert", "delete" -> { if (requireAdmitted(session, sessionId)) handleOp(session, sessionId, node); }
+            case "cursor" -> { if (requireAdmitted(session, sessionId)) handleCursor(session, sessionId, node); }
+            case "approve" -> { if (requireAdmin(sessionId, token)) handleApprove(sessionId, token, node); }
+            case "reject" -> { if (requireAdmin(sessionId, token)) handleReject(sessionId, token, node); }
+            case "kick" -> { if (requireAdmin(sessionId, token)) handleKick(sessionId, token, node); }
+            case "endsession" -> { if (requireAdmin(sessionId, token)) endSession(sessionId); }
             default -> log.warn("[{}] ignoring message of unknown type '{}'", sessionId, type);
         }
     }
 
-    private void handleCursor(WebSocketSession session, String sessionId, JsonNode node,
-                              String clientId, String payload) {
-        if (clientId == null || !node.has("pos")) return;
-        cursorPositions.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>())
-                .put(clientId, node.get("pos").asInt());
-        // Relay the raw cursor message to everyone else; no OT processing.
-        broadcast(sessionId, payload, session.getId());
-    }
+    // ---------------- edit / cursor ----------------
 
     private void handleOp(WebSocketSession session, String sessionId, JsonNode node) {
         TokenBucket bucket = (TokenBucket) session.getAttributes().get(ATTR_BUCKET);
@@ -126,7 +166,6 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             log.warn("[{}] rate limit exceeded for {}; dropping op", sessionId, session.getId());
             return;
         }
-
         OTService.OpDTO dto;
         try {
             dto = mapper.treeToValue(node, OTService.OpDTO.class);
@@ -134,7 +173,6 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             log.warn("[{}] dropping malformed op: {}", sessionId, e.getMessage());
             return;
         }
-
         OTService.ApplyResult result;
         try {
             result = otService.applyOp(sessionId, dto);
@@ -142,81 +180,230 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             log.warn("[{}] rejected invalid op: {}", sessionId, e.getMessage());
             return;
         }
-
-        Map<String, Object> opPayload = Map.of(
+        // Broadcast to everyone including sender — the client advances its pending queue on its own ack.
+        broadcast(sessionId, json(Map.of(
                 "type", "op",
                 "op", result.getTransformedOp(),
-                "version", result.getNewVersion()
-        );
-        try {
-            // Broadcast to everyone including the sender — the client relies on
-            // receiving its own committed op back to advance its pending queue.
-            broadcast(sessionId, mapper.writeValueAsString(opPayload), null);
-        } catch (Exception e) {
-            log.error("[{}] failed to serialize op payload", sessionId, e);
+                "version", result.getNewVersion())), null);
+    }
+
+    private void handleCursor(WebSocketSession session, String sessionId, JsonNode node) {
+        String clientId = attr(session, ATTR_CLIENT_ID);
+        if (clientId == null || !node.has("pos")) return;
+        cursorPositions.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>())
+                .put(clientId, node.get("pos").asInt());
+        broadcast(sessionId, node.toString(), session.getId());
+    }
+
+    // ---------------- admin actions ----------------
+
+    private void handleApprove(String sessionId, String adminToken, JsonNode node) {
+        String joinKey = node.path("joinKey").asText(null);
+        if (joinKey == null) return;
+        User u = sessionService.approve(sessionId, adminToken, joinKey);
+        if (u == null) return;
+        WebSocketSession pending = takePendingByJoinKey(sessionId, joinKey);
+        if (pending != null && pending.isOpen()) {
+            try {
+                admit(pending, sessionId);
+            } catch (IOException e) {
+                log.warn("[{}] failed to admit approved client: {}", sessionId, e.getMessage());
+            }
+        }
+        sendToAdmins(sessionId, json(Map.of("type", "joinResolved", "joinKey", joinKey)));
+    }
+
+    private void handleReject(String sessionId, String adminToken, JsonNode node) {
+        String joinKey = node.path("joinKey").asText(null);
+        if (joinKey == null) return;
+        User u = sessionService.reject(sessionId, adminToken, joinKey);
+        if (u == null) return;
+        WebSocketSession pending = takePendingByJoinKey(sessionId, joinKey);
+        if (pending != null) {
+            sendJson(pending, Map.of("type", "joinDenied", "reason", "rejected by host"));
+            closeQuietly(pending, CloseStatus.POLICY_VIOLATION);
+        }
+        sendToAdmins(sessionId, json(Map.of("type", "joinResolved", "joinKey", joinKey)));
+    }
+
+    private void handleKick(String sessionId, String adminToken, JsonNode node) {
+        String targetClientId = node.path("clientId").asText(null);
+        if (targetClientId == null) return;
+        Map<String, WebSocketSession> room = roomClients.get(sessionId);
+        if (room == null) return;
+        for (WebSocketSession s : room.values()) {
+            if (targetClientId.equals(attr(s, ATTR_CLIENT_ID))) {
+                String token = attr(s, ATTR_TOKEN);
+                if (token != null && token.equals(adminToken)) continue; // don't let admin kick self
+                sessionService.revoke(sessionId, token);
+                sendJson(s, Map.of("type", "kicked"));
+                closeQuietly(s, CloseStatus.POLICY_VIOLATION);
+                log.info("Session {}: kicked {}", sessionId, targetClientId);
+                break;
+            }
         }
     }
+
+    private void endSession(String sessionId) {
+        log.info("Session {}: ended by admin", sessionId);
+        closeAll(roomClients.remove(sessionId), "sessionEnded");
+        closeAll(pendingSockets.remove(sessionId), "sessionEnded");
+        cursorPositions.remove(sessionId);
+        lastActivity.remove(sessionId);
+        otService.evict(sessionId);
+        sessionService.evict(sessionId);
+    }
+
+    // ---------------- lifecycle ----------------
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        String sessionId = (String) session.getAttributes().get(ATTR_SESSION_ID);
+        String sessionId = attr(session, ATTR_SESSION_ID);
         if (sessionId == null) return;
+        String token = attr(session, ATTR_TOKEN);
+        String clientId = attr(session, ATTR_CLIENT_ID);
+        boolean wasAdmitted = Boolean.TRUE.equals(session.getAttributes().get(ATTR_ADMITTED));
 
-        Map<String, WebSocketSession> room = roomClients.get(sessionId);
-        if (room != null) {
-            room.remove(session.getId());
-
-            String clientId = (String) session.getAttributes().get(ATTR_CLIENT_ID);
-            if (clientId != null) {
-                Map<String, Integer> cursors = cursorPositions.get(sessionId);
-                if (cursors != null) cursors.remove(clientId);
-                broadcastCursorRemove(sessionId, clientId, session.getId());
+        if (wasAdmitted) {
+            Map<String, WebSocketSession> room = roomClients.get(sessionId);
+            if (room != null) {
+                room.remove(session.getId());
+                if (clientId != null) {
+                    Map<String, Integer> cursors = cursorPositions.get(sessionId);
+                    if (cursors != null) cursors.remove(clientId);
+                    broadcast(sessionId, json(Map.of("type", "cursorRemove", "clientId", clientId)), session.getId());
+                }
+                String newAdmin = sessionService.markInactive(sessionId, token);
+                if (newAdmin != null) announceAdmin(sessionId, newAdmin);
+                if (room.isEmpty()) {
+                    onRoomEmpty(sessionId);
+                } else {
+                    broadcastPresence(sessionId);
+                }
             }
-
-            if (room.isEmpty()) {
-                onRoomEmpty(sessionId);
-            } else {
-                touch(sessionId);
-            }
+        } else {
+            Map<String, WebSocketSession> pend = pendingSockets.get(sessionId);
+            if (pend != null) pend.remove(session.getId());
+            String joinKey = attr(session, ATTR_JOIN_KEY);
+            if (joinKey != null) sendToAdmins(sessionId, json(Map.of("type", "joinResolved", "joinKey", joinKey)));
         }
-        log.info("Client {} left room {}", session.getId(), sessionId);
+        log.info("Session {}: {} disconnected", sessionId, clientId);
     }
 
-    /** Tear down all in-memory state for a room once its last client leaves. */
+    /** Last admitted client left: drop the OT document and per-room maps. The Session
+     *  (access list) is kept alive for reconnection and reclaimed later by the reaper. */
     private void onRoomEmpty(String sessionId) {
         roomClients.remove(sessionId);
         cursorPositions.remove(sessionId);
         lastActivity.remove(sessionId);
         otService.evict(sessionId);
-        log.info("Room {} is empty -> evicted", sessionId);
+        // Nobody can approve queued joiners now; release them.
+        closeAll(pendingSockets.remove(sessionId), "host left");
+        log.info("Room {} has no admitted clients -> document evicted", sessionId);
     }
 
-    /**
-     * Backstop sweep for the {@code RoomReaper}: evict rooms that are empty and
-     * have seen no activity past the idle TTL. Eager eviction on last-disconnect
-     * normally handles this; the reaper catches any room that slips through.
-     */
+    /** Backstop sweep for the reaper: evict any room left empty and idle. */
     public List<String> reapIdleRooms(long idleTtlMs, long nowMs) {
         List<String> reaped = new ArrayList<>();
         for (Map.Entry<String, Map<String, WebSocketSession>> e : roomClients.entrySet()) {
-            String sid = e.getKey();
-            Long last = lastActivity.get(sid);
+            Long last = lastActivity.get(e.getKey());
             boolean idle = last == null || (nowMs - last) > idleTtlMs;
             if (e.getValue().isEmpty() && idle) {
-                onRoomEmpty(sid);
-                reaped.add(sid);
+                onRoomEmpty(e.getKey());
+                reaped.add(e.getKey());
             }
         }
         return reaped;
     }
 
-    private void broadcastCursorRemove(String sessionId, String clientId, String excludeWsId) {
-        try {
-            String json = mapper.writeValueAsString(Map.of("type", "cursorRemove", "clientId", clientId));
-            broadcast(sessionId, json, excludeWsId);
-        } catch (Exception e) {
-            log.error("[{}] failed to serialize cursorRemove", sessionId, e);
+    // ---------------- presence / admin notifications ----------------
+
+    private void broadcastPresence(String sessionId) {
+        broadcast(sessionId, buildPresence(sessionId), null);
+    }
+
+    private String buildPresence(String sessionId) {
+        List<Map<String, Object>> users = new ArrayList<>();
+        Map<String, WebSocketSession> room = roomClients.getOrDefault(sessionId, Map.of());
+        for (WebSocketSession s : room.values()) {
+            users.add(Map.of(
+                    "clientId", nullSafe(attr(s, ATTR_CLIENT_ID)),
+                    "name", nullSafe(attr(s, ATTR_NAME)),
+                    "color", nullSafe(attr(s, ATTR_COLOR)),
+                    "role", roleOf(sessionId, attr(s, ATTR_TOKEN))
+            ));
         }
+        return json(Map.of("type", "presence", "users", users));
+    }
+
+    private void notifyAdminsOfRequest(String sessionId, String joinKey, String name, String color) {
+        sendToAdmins(sessionId, json(Map.of(
+                "type", "joinRequest", "joinKey", joinKey,
+                "name", nullSafe(name), "color", nullSafe(color))));
+    }
+
+    /** Tell the room who the admin is, hand the new admin the pending queue. */
+    private void announceAdmin(String sessionId, String newAdminToken) {
+        Map<String, WebSocketSession> room = roomClients.get(sessionId);
+        if (room == null) return;
+        String adminClientId = null;
+        WebSocketSession adminSocket = null;
+        for (WebSocketSession s : room.values()) {
+            if (newAdminToken.equals(attr(s, ATTR_TOKEN))) {
+                adminSocket = s;
+                adminClientId = attr(s, ATTR_CLIENT_ID);
+                break;
+            }
+        }
+        broadcast(sessionId, json(Map.of("type", "adminChanged", "clientId", nullSafe(adminClientId))), null);
+        broadcastPresence(sessionId);
+        if (adminSocket != null) sendPendingListTo(adminSocket, sessionId);
+    }
+
+    private void sendPendingListTo(WebSocketSession session, String sessionId) {
+        var sess = sessionService.get(sessionId);
+        if (sess == null) return;
+        sess.getPendingByJoinKey().forEach((joinKey, u) -> sendJson(session, Map.of(
+                "type", "joinRequest", "joinKey", joinKey,
+                "name", nullSafe(u.getName()), "color", nullSafe(u.getColor()))));
+    }
+
+    private void sendToAdmins(String sessionId, String json) {
+        Map<String, WebSocketSession> room = roomClients.get(sessionId);
+        if (room == null) return;
+        TextMessage msg = new TextMessage(json);
+        for (WebSocketSession s : room.values()) {
+            if (sessionService.isAdmin(sessionId, attr(s, ATTR_TOKEN)) && s.isOpen()) {
+                trySend(s, msg, sessionId);
+            }
+        }
+    }
+
+    // ---------------- transport helpers ----------------
+
+    private boolean requireAdmitted(WebSocketSession session, String sessionId) {
+        boolean ok = Boolean.TRUE.equals(session.getAttributes().get(ATTR_ADMITTED))
+                && sessionService.isAdmitted(sessionId, attr(session, ATTR_TOKEN));
+        if (!ok) log.warn("[{}] dropping message from non-admitted client {}", sessionId, session.getId());
+        return ok;
+    }
+
+    private boolean requireAdmin(String sessionId, String token) {
+        boolean ok = sessionService.isAdmin(sessionId, token);
+        if (!ok) log.warn("[{}] dropping admin action from non-admin", sessionId);
+        return ok;
+    }
+
+    private WebSocketSession takePendingByJoinKey(String sessionId, String joinKey) {
+        Map<String, WebSocketSession> pend = pendingSockets.get(sessionId);
+        if (pend == null) return null;
+        for (Map.Entry<String, WebSocketSession> e : pend.entrySet()) {
+            if (joinKey.equals(attr(e.getValue(), ATTR_JOIN_KEY))) {
+                pend.remove(e.getKey());
+                return e.getValue();
+            }
+        }
+        return null;
     }
 
     private void broadcast(String sessionId, String json, String excludeWsId) {
@@ -225,27 +412,60 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         TextMessage msg = new TextMessage(json);
         for (WebSocketSession s : room.values()) {
             if (excludeWsId != null && s.getId().equals(excludeWsId)) continue;
-            if (!s.isOpen()) continue;
-            try {
-                s.sendMessage(msg);
-            } catch (IOException e) {
-                log.warn("[{}] send to {} failed: {}", sessionId, s.getId(), e.getMessage());
-            }
+            if (s.isOpen()) trySend(s, msg, sessionId);
         }
+    }
+
+    private void closeAll(Map<String, WebSocketSession> sockets, String type) {
+        if (sockets == null) return;
+        for (WebSocketSession s : sockets.values()) {
+            sendJson(s, Map.of("type", type));
+            closeQuietly(s, CloseStatus.NORMAL);
+        }
+    }
+
+    private void sendJson(WebSocketSession session, Map<String, Object> payload) {
+        if (session.isOpen()) trySend(session, new TextMessage(json(payload)), attr(session, ATTR_SESSION_ID));
+    }
+
+    private void trySend(WebSocketSession session, TextMessage msg, String sessionId) {
+        try {
+            session.sendMessage(msg);
+        } catch (IOException e) {
+            log.warn("[{}] send to {} failed: {}", sessionId, session.getId(), e.getMessage());
+        }
+    }
+
+    private void closeQuietly(WebSocketSession session, CloseStatus status) {
+        try {
+            session.close(status);
+        } catch (IOException ignored) {
+            // socket already gone
+        }
+    }
+
+    private String roleOf(String sessionId, String token) {
+        return sessionService.isAdmin(sessionId, token) ? "CREATOR" : "JOINER";
     }
 
     private void touch(String sessionId) {
         lastActivity.put(sessionId, System.currentTimeMillis());
     }
 
-    private static String getSessionId(WebSocketSession session) {
-        URI uri = session.getUri();
-        if (uri == null || uri.getQuery() == null) return null;
-        for (String pair : uri.getQuery().split("&")) {
-            if (pair.startsWith("sessionId=")) {
-                return URLDecoder.decode(pair.substring("sessionId=".length()), StandardCharsets.UTF_8);
-            }
+    private String json(Map<String, Object> payload) {
+        try {
+            return mapper.writeValueAsString(payload);
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to serialize payload", e);
         }
-        return null;
+    }
+
+    private static String attr(WebSocketSession session, String key) {
+        Object v = session.getAttributes().get(key);
+        return v == null ? null : v.toString();
+    }
+
+    private static String nullSafe(String s) {
+        return s == null ? "" : s;
     }
 }
