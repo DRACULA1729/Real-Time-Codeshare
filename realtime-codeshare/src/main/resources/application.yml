@@ -22,6 +22,14 @@ codeshare:
   ws:
     max-message-bytes: 65536    # inbound frame size cap
 
+# Optional GitHub push. Empty client-id/secret => the push UI degrades gracefully.
+github:
+  client-id: ${GITHUB_CLIENT_ID:}
+  client-secret: ${GITHUB_CLIENT_SECRET:}
+  scope: ${GITHUB_OAUTH_SCOPE:public_repo}     # least privilege; override to "repo" for private repos
+  redirect-uri: ${GITHUB_REDIRECT_URI:http://localhost:8080/api/github/callback}
+  api-base: ${GITHUB_API_BASE:https://api.github.com}
+
 logging:
   level:
     root: INFO
