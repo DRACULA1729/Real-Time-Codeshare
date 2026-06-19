@@ -1,0 +1,25 @@
+# Build output
+target/
+build/
+out/
+
+# Node (assets are vendored; no Node build)
+node_modules/
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+.env.*
+
+# IDE / editor
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# OS
+.DS_Store

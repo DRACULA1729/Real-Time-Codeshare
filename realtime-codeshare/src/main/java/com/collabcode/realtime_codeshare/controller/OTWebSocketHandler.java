@@ -20,7 +20,6 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
 
     private final OTService otService;
     private final ObjectMapper mapper = new ObjectMapper();
-    //private final CodeRunnerService codeRunnerService = new CodeRunnerService();
 
 
     // sessionId -> admitted clients (only approved clients live here)
@@ -93,105 +92,8 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
                 }
             }
         }
-//
-//        if ("saveAndRun".equalsIgnoreCase(type)) {
-//            //Logging
-//            System.out.println("Processing for: "+sessionId);
-//            String code = otService.getDocument(sessionId);
-//            String result = saveAndRunCode(code);
-//            Map<String, Object> runPayload = Map.of(
-//                    "type", "runResult",
-//                    "result", result
-//            );
-//            session.sendMessage(new TextMessage(mapper.writeValueAsString(runPayload)));
-//        }
     }
-    /*  // Added: Method to prompt for file name
-      private String promptFileName() {
-          // Simulate user prompt (adjust for WebSocket context if needed)
-          Scanner scanner = new Scanner(System.in);
-          System.out.print("Enter file name (without .java): ");
-          return scanner.nextLine().trim();
-      }
-      private String extractClassName(String code) {
-          String[] lines = code.split("\n");
-          for (String line : lines) {
-              if (line.trim().startsWith("public class")) {
-                  String[] parts = line.trim().split("\\s+");
-                  if (parts.length >= 3 && parts[1].equals("class")) {
-                      return parts[2].replace("{", "").trim();
-                  }
-              }
-          }
-          return null;
-      }
 
-      public String saveAndRunCode(String code) {
-          try {
-              System.out.println("Starting save and Run for: "+code);
-              // Delete previous file if exists
-              if (CodeRunnerService.currentFile != null &&
-                      CodeRunnerService.currentFile.exists()) {
-                  Files.delete(CodeRunnerService.currentFile.toPath());
-              }
-
-              // Save new code to temp file
-            //  CodeRunnerService.currentFile = File.createTempFile("code_", ".java", new File(CodeRunnerService.TEMP_DIR));
-            //  String className = CodeRunnerService.currentFile.getName().replace(".java", "");
-              String fileName = promptFileName();
-              if (fileName == null) return "Filename not provided so operation cancelled";
-              File file = new File(CodeRunnerService.TEMP_DIR, fileName + ".java");
-              String className = extractClassName(code);
-              if (className == null || !className.equals(fileName)) {
-                  return "Error: Class name '" + (className != null ? className : "not found") + "' does not match file name '" + fileName + "'";
-              }
-              String wrappedCode = "public class " + className + " {\n" + code + "\n}";
-              //System.out.println("PATH IS: "+  CodeRunnerService.currentFile);
-              try (FileWriter writer = new FileWriter(CodeRunnerService.currentFile)) {
-                  writer.write(code);
-              }
-
-              // Added: Log file path and content
-              System.out.println("Saved file at: " + CodeRunnerService.currentFile.getAbsolutePath());
-              System.out.println("File content: " + wrappedCode);
-
-              // Compile
-              ProcessBuilder compilePb = new ProcessBuilder("javac", CodeRunnerService.currentFile.getAbsolutePath());
-              Process compileProcess = compilePb.start();
-              String compileError = readStream(compileProcess.getErrorStream());
-              if (compileProcess.waitFor() != 0) {
-                  return "Compilation error: " + compileError;
-              }
-
-              // Run
-              //String className = CodeRunnerService.currentFile.getName().replace(".java", "");
-              ProcessBuilder runPb = new ProcessBuilder("java", "-Djava.security.manager", className);
-              runPb.directory(CodeRunnerService.currentFile.getParentFile());
-              Process runProcess = runPb.start();
-              String output = readStream(runProcess.getInputStream());
-              String error = readStream(runProcess.getErrorStream());
-              runProcess.waitFor();
-
-              // Clean up class file
-              new File(className + ".class").delete();
-
-              return error.isEmpty() ? output : "Runtime error: " + error;
-          } catch (Exception e) {
-              return "Error: " + e.getMessage();
-          }
-      }
-
-      private String readStream(InputStream stream) throws IOException {
-          StringBuilder result = new StringBuilder();
-          try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream))) {
-              String line;
-              while ((line = reader.readLine()) != null) {
-                  result.append(line).append("\n");
-              }
-          }
-          return result.toString();
-      }
-  */
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         String sessionId = getSessionId(session);

@@ -1,6 +1,5 @@
 package com.collabcode.realtime_codeshare.ot;
 
-import com.collabcode.realtime_codeshare.model.Type;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
