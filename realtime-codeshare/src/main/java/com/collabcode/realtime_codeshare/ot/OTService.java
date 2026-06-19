@@ -1,13 +1,28 @@
 package com.collabcode.realtime_codeshare.ot;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Authoritative in-memory Operational-Transform engine.
+ *
+ * One {@link DocumentStore} per session id holds the document text, a monotonic
+ * version counter, and a bounded op history. The transform-and-apply step is a
+ * single critical section inside {@link DocumentStore#commit(Op)} so concurrent
+ * edits can never observe a half-applied state.
+ */
 @Service
 public class OTService {
+
+    private static final Logger log = LoggerFactory.getLogger(OTService.class);
+
+    /** Max characters an insert may carry / max span a delete may cover. */
+    static final int MAX_OP_LEN = 65_536;
 
     private final Map<String, DocumentStore> sessions = new ConcurrentHashMap<>();
 
@@ -15,20 +30,29 @@ public class OTService {
         return sessions.computeIfAbsent(sessionId, k -> new DocumentStore());
     }
 
-    public ApplyResult applyOp(String sessionId, OpDTO dto) {
-        DocumentStore store = getOrCreateStore(sessionId);
-        Op incoming = dto.toOp();
-        List<CommittedOp> opsToTransform = store.getOpsSince(incoming.getBaseVersion());
-        Op transformed = incoming.copy();
-        System.out.println("[OT DEBUG] incoming: "+incoming);
-        for (CommittedOp co : opsToTransform) {
-            transformed = OTEngine.transform(transformed, co.op);
-            System.out.println("[OT DEBUG]  transform against: " + co.op);
-            System.out.println("[OT DEBUG]  transformed -> " + transformed);
-        }
+    public boolean hasStore(String sessionId) {
+        return sessions.containsKey(sessionId);
+    }
 
-        int newVersion = store.applyTransformed(transformed);
-        return new ApplyResult(newVersion, transformed);
+    /**
+     * Validate the incoming DTO, then atomically transform-and-apply it.
+     *
+     * @throws InvalidOpException if the op is malformed; the caller is expected
+     *                            to warn and ignore rather than crash.
+     */
+    public ApplyResult applyOp(String sessionId, OpDTO dto) {
+        Op incoming = validateAndBuild(dto);
+        ApplyResult result = getOrCreateStore(sessionId).commit(incoming);
+        // DEBUG only: the op carries document content, never log above DEBUG.
+        log.debug("[{}] committed {} -> v{}", sessionId, result.getTransformedOp(), result.getNewVersion());
+        return result;
+    }
+
+    /** Drop a room's entire OT state. Called when a room empties or is reaped. */
+    public void evict(String sessionId) {
+        if (sessions.remove(sessionId) != null) {
+            log.info("Evicted document store for session {}", sessionId);
+        }
     }
 
     public String getDocument(String sessionId) {
@@ -38,6 +62,37 @@ public class OTService {
     public int getVersion(String sessionId) {
         return getOrCreateStore(sessionId).getVersion();
     }
+
+    // ---------------- validation ----------------
+
+    private Op validateAndBuild(OpDTO dto) {
+        if (dto == null) throw new InvalidOpException("op is null");
+        if (dto.clientId == null || dto.clientId.isBlank())
+            throw new InvalidOpException("clientId must be non-blank");
+        if (dto.type == null) throw new InvalidOpException("type is required");
+        if (dto.baseVersion < 0) throw new InvalidOpException("baseVersion must be >= 0");
+        if (dto.pos < 0) throw new InvalidOpException("pos must be >= 0");
+
+        String type = dto.type.toLowerCase(Locale.ROOT);
+        switch (type) {
+            case "insert" -> {
+                String text = dto.text == null ? "" : dto.text;
+                if (text.length() > MAX_OP_LEN)
+                    throw new InvalidOpException("insert text exceeds " + MAX_OP_LEN + " chars");
+                return new InsertOp(dto.clientId, dto.baseVersion, dto.pos, text);
+            }
+            case "delete" -> {
+                int length = dto.length == null ? 0 : dto.length;
+                if (length < 0) throw new InvalidOpException("delete length must be >= 0");
+                if (length > MAX_OP_LEN)
+                    throw new InvalidOpException("delete length exceeds " + MAX_OP_LEN);
+                return new DeleteOp(dto.clientId, dto.baseVersion, dto.pos, length);
+            }
+            default -> throw new InvalidOpException("unknown op type: " + dto.type);
+        }
+    }
+
+    // ---------------- model ----------------
 
     public static abstract class Op {
         public enum Type { INSERT, DELETE }
@@ -83,7 +138,8 @@ public class OTService {
 
         @Override
         public String toString() {
-            return "InsertOp[pos=" + pos + ",text='" + text + "',client=" + clientId + ",baseV=" + baseVersion + "]";
+            return "InsertOp[pos=" + pos + ",len=" + (text == null ? 0 : text.length())
+                    + ",client=" + clientId + ",baseV=" + baseVersion + "]";
         }
     }
 
@@ -129,7 +185,9 @@ public class OTService {
     public static class OTEngine {
 
         private static boolean clientWinsInsertTie(String clientA, String clientB) {
-            return clientA.compareTo(clientB) < 0;
+            String a = clientA == null ? "" : clientA;
+            String b = clientB == null ? "" : clientB;
+            return a.compareTo(b) < 0;
         }
 
         public static Op transform(Op a, Op b) {
@@ -168,7 +226,7 @@ public class OTService {
             return a;
         }
 
-        // PATCHED: Handles inserts inside delete range
+        // Handles inserts inside a delete range.
         private static DeleteOp transformDeleteInsert(DeleteOp a, InsertOp b) {
             if (b.getPos() <= a.getPos()) {
                 a.pos += b.getText().length();
@@ -178,7 +236,7 @@ public class OTService {
             return a;
         }
 
-        // PATCHED: More robust overlap handling
+        // Robust overlap handling for two concurrent deletes.
         private static DeleteOp transformDeleteDelete(DeleteOp a, DeleteOp b) {
             int aStart = a.getPos();
             int aEnd = a.getPos() + a.getLength();
@@ -205,6 +263,9 @@ public class OTService {
     }
 
     public static class DocumentStore {
+        /** Cap on retained history; beyond this the oldest committed ops are compacted away. */
+        static final int MAX_HISTORY = 2000;
+
         private final StringBuilder doc = new StringBuilder();
         private final List<CommittedOp> history = new ArrayList<>();
         private final AtomicInteger version = new AtomicInteger(0);
@@ -213,78 +274,49 @@ public class OTService {
 
         public synchronized String getDocument() { return doc.toString(); }
 
-        public synchronized List<CommittedOp> getOpsSince(int fromVersion) {
-            List<CommittedOp> res = new ArrayList<>();
-            for (CommittedOp co : history) {
-                if (co.version > fromVersion) res.add(co);
-            }
-            return res;
-        }
+        public synchronized int historySize() { return history.size(); }
 
-        public synchronized int applyTransformed(Op op) {
-            if (op instanceof InsertOp) {
-                InsertOp i = (InsertOp) op;
+        /**
+         * Transform the incoming op against every op committed since its base
+         * version, apply it to the document, bump the version, and append it to
+         * history — all under this store's monitor so the
+         * version/history/document invariant can never be observed mid-update.
+         */
+        public synchronized ApplyResult commit(Op incoming) {
+            Op transformed = incoming.copy();
+            int base = incoming.getBaseVersion();
+            for (CommittedOp co : history) {
+                if (co.version > base) {
+                    transformed = OTEngine.transform(transformed, co.op);
+                }
+            }
+
+            if (transformed instanceof InsertOp i) {
                 int p = Math.max(0, Math.min(i.getPos(), doc.length()));
                 doc.insert(p, i.getText());
-            } else if (op instanceof DeleteOp) {
-                DeleteOp d = (DeleteOp) op;
+            } else if (transformed instanceof DeleteOp d) {
                 int p = Math.max(0, Math.min(d.getPos(), doc.length()));
                 int end = Math.max(p, Math.min(doc.length(), p + d.getLength()));
                 if (end > p) doc.delete(p, end);
             }
+
             int newVersion = version.incrementAndGet();
-            history.add(new CommittedOp(op.copy(), newVersion));
-            return newVersion;
+            history.add(new CommittedOp(transformed.copy(), newVersion));
+
+            if (history.size() > MAX_HISTORY) {
+                // Drop the oldest ops; clients at the bleeding edge stay correct,
+                // very stale clients re-sync via init. Precise snapshotting later.
+                compactBelow(newVersion - MAX_HISTORY);
+            }
+            return new ApplyResult(newVersion, transformed);
         }
 
         /**
-         * Replace the entire document contents and reset history.
-         *
-         * WARNING: calling this while clients are actively editing may lead to
-         * inconsistent client views until clients receive an explicit "init"
-         * or refresh message from the server. Restrict this operation to the
-         * session creator / admin, or ensure you broadcast an "init" to clients
-         * immediately after calling restoreDocument().
-         *
-         * @param newText the new document contents (may be null -> treated as empty)
-         * @param newVersion if >= 0, set document version to this value; if negative, version will be incremented by 1
+         * Seam for snapshot-based compaction: discard every committed op at or
+         * below {@code version}. Safe only for ops no client will still rebase on.
          */
-        public synchronized void replaceDocument(String newText, int newVersion) {
-            // replace content
-            doc.setLength(0);
-            if (newText != null) doc.append(newText);
-
-            // clear history - the server becomes authoritative from this point
-            history.clear();
-
-            if (newVersion >= 0) {
-                version.set(newVersion);
-            } else {
-                // bump version to indicate change
-                version.incrementAndGet();
-            }
-        }
-        public synchronized void restore(String text, int version) {
-            doc.setLength(0);
-            doc.append(text != null ? text : "");
-            history.clear();
-            if (version > 0) {
-                this.version.set(version);
-            } else {
-                this.version.set(0);
-            }
-        }
-
-        /**
-         * Optional helper if you want to set document and also seed a synthetic "initial" committed op.
-         * Not used by default, but available if you prefer to keep one history entry.
-         */
-        public synchronized void replaceDocumentWithInitialCommit(String newText, int newVersion, Op initialOp) {
-            replaceDocument(newText, Math.max(newVersion, 0));
-            if (initialOp != null) {
-                int v = version.incrementAndGet();
-                history.add(new CommittedOp(initialOp.copy(), v));
-            }
+        public synchronized void compactBelow(int version) {
+            history.removeIf(co -> co.version <= version);
         }
     }
 
@@ -297,14 +329,6 @@ public class OTService {
         public Integer length;
 
         public OpDTO() {}
-
-        public Op toOp() {
-            if ("insert".equalsIgnoreCase(type)) {
-                return new InsertOp(clientId, baseVersion, pos, text == null ? "" : text);
-            } else {
-                return new DeleteOp(clientId, baseVersion, pos, length == null ? 0 : length);
-            }
-        }
     }
 
     public static class ApplyResult {
@@ -320,12 +344,5 @@ public class OTService {
 
         public int getNewVersion() { return newVersion; }
         public Op getTransformedOp() { return transformedOp; }
-
-
     }
-    public synchronized void restoreDocument(String sessionId, String text, int version) {
-        DocumentStore store = getOrCreateStore(sessionId);
-        store.replaceDocument(text, version);
-    }
-
 }

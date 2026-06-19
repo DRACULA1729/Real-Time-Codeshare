@@ -7,6 +7,17 @@ spring:
     prefix: classpath:/templates/
     suffix: .html
 
+codeshare:
+  room:
+    idle-ttl-ms: 1800000        # evict empty rooms idle longer than 30 min
+  reaper:
+    interval-ms: 60000          # idle-room sweep cadence
+  rate:
+    ops-per-sec: 50             # per-connection op rate limit
+  ws:
+    max-message-bytes: 65536    # inbound frame size cap
+
 logging:
   level:
     root: INFO
+    com.collabcode.realtime_codeshare: INFO   # set DEBUG locally for per-op trace
