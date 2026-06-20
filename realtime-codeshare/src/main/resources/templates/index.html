@@ -70,12 +70,14 @@
     </div>
 
     <div class="action-buttons-collapsible">
-        <button id="toggleActionsBtn" title="Toggle Actions">☰ Actions</button>
+        <button id="toggleActionsBtn" title="Toggle Actions"><span class="ab-ico">☰</span><span class="ab-label">Actions</span></button>
         <div class="action-buttons-content">
-            <div class="row">
-                <input id="filenameInput" placeholder="filename" />
-                <button id="downloadMainBtn">Download</button>
-                <button id="downloadMenuBtn">▾</button>
+            <input id="filenameInput" placeholder="filename" />
+            <div class="dropdown">
+                <div class="row">
+                    <button id="downloadMainBtn">Download</button>
+                    <button id="downloadMenuBtn" class="caret">▾</button>
+                </div>
                 <div id="downloadMenu" hidden>
                     <div class="download-option" data-mode="raw">Download as <span id="download-ext-display"></span></div>
                     <div class="download-option" data-mode="zip">Download as .zip (with metadata)</div>
