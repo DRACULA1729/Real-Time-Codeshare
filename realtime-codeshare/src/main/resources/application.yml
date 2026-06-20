@@ -8,7 +8,8 @@ spring:
     suffix: .html
 
 codeshare:
-  # Comma-separated allowed Origin(s) for the WS upgrade. Add https origins for prod.
+  # Comma-separated allowed Origin(s)/patterns for the WS upgrade. Entries may be
+  # exact (http://localhost:8080) or wildcard hosts (https://*.ngrok-free.app).
   allowed-origins: ${CODESHARE_ALLOWED_ORIGINS:http://localhost:8080}
   session:
     max-rejected-attempts: 3    # rejected joins per identity before a temporary block

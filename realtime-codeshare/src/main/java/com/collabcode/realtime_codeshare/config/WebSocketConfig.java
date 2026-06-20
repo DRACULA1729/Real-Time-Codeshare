@@ -32,9 +32,12 @@ public class WebSocketConfig implements WebSocketConfigurer {
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
+        // Patterns, so an entry may be an exact origin (http://localhost:8080) or a
+        // wildcard host (https://*.ngrok-free.app) for tunnelled testing. Exact
+        // origins still match exactly.
         registry.addHandler(otWebSocketHandler, "/ws/ot")
                 .addInterceptors(handshakeInterceptor)
-                .setAllowedOrigins(allowedOrigins);
+                .setAllowedOriginPatterns(allowedOrigins);
     }
 
     /** Cap the inbound text/binary frame size so a single huge message can't exhaust memory. */
