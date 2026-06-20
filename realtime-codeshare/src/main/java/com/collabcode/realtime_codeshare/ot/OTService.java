@@ -308,7 +308,13 @@ public class OTService {
                 // very stale clients re-sync via init. Precise snapshotting later.
                 compactBelow(newVersion - MAX_HISTORY);
             }
-            return new ApplyResult(newVersion, transformed);
+            return new ApplyResult(newVersion, transformed, doc.toString().hashCode());
+        }
+
+        /** Atomic (document, version, hash) snapshot for re-sync. */
+        public synchronized Snapshot snapshot() {
+            String d = doc.toString();
+            return new Snapshot(d, version.get(), d.hashCode());
         }
 
         /**
@@ -334,15 +340,25 @@ public class OTService {
     public static class ApplyResult {
         public int newVersion;
         public Op transformedOp;
+        public int docHash;
 
         public ApplyResult() {}
 
-        public ApplyResult(int newVersion, Op transformedOp) {
+        public ApplyResult(int newVersion, Op transformedOp, int docHash) {
             this.newVersion = newVersion;
             this.transformedOp = transformedOp;
+            this.docHash = docHash;
         }
 
         public int getNewVersion() { return newVersion; }
         public Op getTransformedOp() { return transformedOp; }
+        public int getDocHash() { return docHash; }
+    }
+
+    /** Immutable (document, version, hash) snapshot of a store. */
+    public record Snapshot(String document, int version, int docHash) {}
+
+    public Snapshot snapshot(String sessionId) {
+        return getOrCreateStore(sessionId).snapshot();
     }
 }

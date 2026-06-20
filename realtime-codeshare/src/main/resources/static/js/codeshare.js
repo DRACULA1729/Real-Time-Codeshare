@@ -12,7 +12,13 @@ let myColor = "#7aa2f7";
 let admitted = false;
 
 let baseVersion = 0;
-const pendingOps = [];      // FIFO of un-acked local ops
+// Jupiter-style client: exactly one op in flight (outstanding) at a time; later
+// local edits wait in `buffer` and are sent one at a time as acks arrive. This is
+// what keeps concurrent editing convergent — pipelining every op with the same
+// stale base version makes the server re-transform ops against edits they were
+// already built on, and the documents drift apart.
+let outstanding = null;     // op sent to the server, awaiting its ack
+const buffer = [];          // local ops created since `outstanding`, not yet sent
 let ws = null;
 let editor = null;
 
@@ -112,6 +118,7 @@ function onMessage(evt) {
   switch (msg.type) {
     case "init": handleInit(msg); break;
     case "op": handleOp(msg); break;
+    case "resync": handleResync(msg); break;
     case "cursor": if (msg.clientId !== clientId) showRemoteCursor(msg.clientId, indexToPos(msg.pos), colorForClient(msg.clientId)); break;
     case "cursorRemove": removeRemoteCursor(msg.clientId); break;
     case "presence": renderPresence(msg.users || []); break;
@@ -139,7 +146,8 @@ function handleInit(msg) {
   runWithoutSending(() => {
     editor.setValue(msg.document || "");
     baseVersion = msg.version || 0;
-    pendingOps.length = 0;
+    outstanding = null;
+    buffer.length = 0;
   });
   detectAndSetMode();
 
@@ -170,28 +178,93 @@ function onLocalChange(cm, change) {
   const toIndex = posToIndex(change.to);
   const removedLen = Math.max(0, toIndex - fromIndex);
   const insertedText = change.text.join("\n");
-  const ops = [];
-  if (removedLen > 0) ops.push({ clientId, type: "delete", baseVersion, pos: fromIndex, length: removedLen });
-  if (insertedText.length > 0) ops.push({ clientId, type: "insert", baseVersion, pos: fromIndex, text: insertedText });
-  for (const op of ops) {
-    pendingOps.push(copyOp(op));
+  // A replace produces a delete then an insert at the same index.
+  if (removedLen > 0) submitLocalOp({ clientId, type: "delete", baseVersion, pos: fromIndex, length: removedLen });
+  if (insertedText.length > 0) submitLocalOp({ clientId, type: "insert", baseVersion, pos: fromIndex, text: insertedText });
+}
+
+// Send immediately only if nothing is in flight; otherwise queue it.
+function submitLocalOp(op) {
+  if (outstanding === null) {
+    outstanding = op;
+    op.baseVersion = baseVersion;
     send(op);
+  } else {
+    buffer.push(op);
   }
 }
 
 function handleOp(msg) {
   const serverOp = msg.op;
   serverOp.type = String(serverOp.type).toLowerCase();
+
   if (serverOp.clientId === clientId) {
-    pendingOps.shift();
-    for (let i = 0; i < pendingOps.length; i++) pendingOps[i] = transformOp(pendingOps[i], serverOp);
+    // Ack for our outstanding op. Promote the next buffered op (re-based to the
+    // now-current version) so only ever one op is in flight.
     baseVersion = msg.version;
-    return;
+    if (buffer.length > 0) {
+      outstanding = buffer.shift();
+      outstanding.baseVersion = baseVersion;
+      send(outstanding);
+    } else {
+      outstanding = null;
+    }
+  } else {
+    // Remote op: rebase it past our outstanding + buffered ops to apply at the
+    // right place locally, and rebase those past it so they stay valid.
+    let r = serverOp;
+    if (outstanding !== null) {
+      const rNext = transformOp(r, outstanding);
+      outstanding = transformOp(outstanding, r);
+      r = rNext;
+    }
+    for (let i = 0; i < buffer.length; i++) {
+      const rNext = transformOp(r, buffer[i]);
+      buffer[i] = transformOp(buffer[i], r);
+      r = rNext;
+    }
+    runWithoutSending(() => applyOpToEditor(r));
+    baseVersion = msg.version;
   }
-  let incoming = serverOp;
-  for (const p of pendingOps) incoming = transformOp(incoming, p);
-  runWithoutSending(() => applyOpToEditor(incoming));
-  baseVersion = msg.version;
+  if (isQuiescent()) scheduleProbe();
+}
+
+const isQuiescent = () => outstanding === null && buffer.length === 0;
+
+// Self-heal: a short while after we go idle, verify our document against the
+// server's authoritative copy. Optimistic OT can drift under heavy concurrent
+// editing; this pulls the correct document whenever we are caught up but
+// disagree. Self-terminating — once the hashes match, handleResync stops
+// re-arming the probe, so a synced client sends at most one verify per idle gap.
+let probeTimer = null;
+function scheduleProbe() {
+  clearTimeout(probeTimer);
+  probeTimer = setTimeout(() => { if (isQuiescent()) send({ type: "resync" }); }, 700);
+}
+
+// Matches Java String.hashCode so client and server agree on the document hash.
+function strHash(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return h;
+}
+
+// Apply the server's authoritative copy — but only if we're still caught up and
+// actually diverged, so we never clobber edits the user made while the resync
+// was in flight. When in sync, return without re-arming so the loop stops.
+function handleResync(msg) {
+  if (!isQuiescent()) return;                                   // user resumed typing; keep their edits
+  if (typeof msg.hash === "number" && strHash(editor.getValue()) === msg.hash) return; // in sync; stop
+  const caret = editor ? posToIndex(editor.getDoc().getCursor()) : 0;
+  runWithoutSending(() => {
+    editor.setValue(msg.document || "");
+    baseVersion = msg.version || 0;
+    outstanding = null;
+    buffer.length = 0;
+  });
+  if (editor) editor.getDoc().setCursor(indexToPos(Math.min(caret, (msg.document || "").length)));
+  scheduleProbe();                                             // re-verify until stable
+  console.warn("[OT] re-synced to server document");
 }
 
 function applyOpToEditor(op) {
@@ -225,7 +298,9 @@ function indexToPos(index) {
 }
 
 // ---------------- OT engine (client mirror of the server) ----------------
-function clientWinsInsertTie(a, b) { return String(a).localeCompare(String(b)) < 0; }
+// Code-unit comparison so the tie-break is byte-identical to the server's
+// String.compareTo (localeCompare can order differently and cause divergence).
+function clientWinsInsertTie(a, b) { return String(a) < String(b); }
 function copyOp(op) { return JSON.parse(JSON.stringify(op)); }
 function transformOp(a, b) {
   const at = String(a.type).toLowerCase(), bt = String(b.type).toLowerCase();
@@ -367,7 +442,36 @@ function wireActions() {
   });
   $("githubPushBtn").addEventListener("click", pushToGitHub);
 
+  const jrp = $("joinRequestsPanel");
+  makeDraggable(jrp, jrp.querySelector("strong"));
+
   detectAndSetMode();
+}
+
+// Drag a fixed-position panel by a handle element, clamped to the viewport.
+function makeDraggable(panel, handle) {
+  if (!panel || !handle) return;
+  handle.style.cursor = "move";
+  let dragging = false, offX = 0, offY = 0;
+  handle.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    const r = panel.getBoundingClientRect();
+    offX = e.clientX - r.left;
+    offY = e.clientY - r.top;
+    panel.style.right = "auto";
+    handle.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const x = Math.max(0, Math.min(e.clientX - offX, window.innerWidth - panel.offsetWidth));
+    const y = Math.max(0, Math.min(e.clientY - offY, window.innerHeight - panel.offsetHeight));
+    panel.style.left = x + "px";
+    panel.style.top = y + "px";
+  });
+  const stop = (e) => { dragging = false; try { handle.releasePointerCapture(e.pointerId); } catch {} };
+  handle.addEventListener("pointerup", stop);
+  handle.addEventListener("pointercancel", stop);
 }
 
 function detectExtension() {

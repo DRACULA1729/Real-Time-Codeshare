@@ -150,6 +150,7 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         switch (type) {
             case "insert", "delete" -> { if (requireAdmitted(session, sessionId)) handleOp(session, sessionId, node); }
             case "cursor" -> { if (requireAdmitted(session, sessionId)) handleCursor(session, sessionId, node); }
+            case "resync" -> { if (requireAdmitted(session, sessionId)) handleResync(session, sessionId); }
             case "approve" -> { if (requireAdmin(sessionId, token)) handleApprove(sessionId, token, node); }
             case "reject" -> { if (requireAdmin(sessionId, token)) handleReject(sessionId, token, node); }
             case "kick" -> { if (requireAdmin(sessionId, token)) handleKick(sessionId, token, node); }
@@ -181,10 +182,23 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         // Broadcast to everyone including sender — the client advances its pending queue on its own ack.
+        // The hash lets a caught-up client detect drift and request a re-sync.
         broadcast(sessionId, json(Map.of(
                 "type", "op",
                 "op", result.getTransformedOp(),
-                "version", result.getNewVersion())), null);
+                "version", result.getNewVersion(),
+                "hash", result.getDocHash())), null);
+    }
+
+    /** A caught-up client that detected drift asks for the authoritative document. */
+    private void handleResync(WebSocketSession session, String sessionId) {
+        OTService.Snapshot snap = otService.snapshot(sessionId);
+        sendJson(session, Map.of(
+                "type", "resync",
+                "document", snap.document(),
+                "version", snap.version(),
+                "hash", snap.docHash()));
+        log.info("Session {}: re-synced a drifted client", sessionId);
     }
 
     private void handleCursor(WebSocketSession session, String sessionId, JsonNode node) {
