@@ -1,5 +1,7 @@
 package com.collabcode.realtime_codeshare.github;
 
+import com.collabcode.realtime_codeshare.controller.GitHubController;
+import com.collabcode.realtime_codeshare.controller.SessionController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -14,10 +16,14 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Translates exceptions into clean JSON {@code {error, status}} responses.
- * Never leaks a stack trace or an access token to the client.
+ * Translates exceptions from the JSON API controllers into clean {@code {error, status}}
+ * responses. Never leaks a stack trace or an access token to the client.
+ *
+ * Scoped to the API controllers so it does not turn framework-level conditions
+ * (e.g. a missing static resource, which should be a 404) into 500s.
  */
-@RestControllerAdvice
+@RestControllerAdvice(assignableTypes = {
+        GitHubController.class, GitHubOAuthController.class, SessionController.class})
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);

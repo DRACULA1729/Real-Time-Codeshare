@@ -5,6 +5,9 @@
     box-sizing: border-box;
 }
 
+/* The hidden attribute must always win, even over display:flex rules below. */
+[hidden] { display: none !important; }
+
 html, body {
     height: 100%;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -189,7 +192,6 @@ html, body {
 }
 
 #downloadMenu {
-  display: none;
   position: relative;
   top: 5px;
   left: 0;

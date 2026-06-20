@@ -431,7 +431,10 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
     private void trySend(WebSocketSession session, TextMessage msg, String sessionId) {
         try {
             session.sendMessage(msg);
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            // IOException on a broken pipe, or IllegalStateException when the peer
+            // socket is mid-close during a broadcast. Best-effort send: never let
+            // one dead socket disrupt the room.
             log.warn("[{}] send to {} failed: {}", sessionId, session.getId(), e.getMessage());
         }
     }

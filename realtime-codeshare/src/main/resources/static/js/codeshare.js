@@ -353,10 +353,10 @@ function wireActions() {
   });
 
   const menuBtn = $("downloadMenuBtn"), menu = $("downloadMenu");
-  menuBtn.addEventListener("click", () => { menu.style.display = (menu.style.display === "block") ? "none" : "block"; });
+  menuBtn.addEventListener("click", () => { menu.hidden = !menu.hidden; });
   $("downloadMainBtn").addEventListener("click", () => handleDownloadChoice("raw"));
   menu.querySelectorAll(".download-option").forEach(opt =>
-    opt.addEventListener("click", () => { handleDownloadChoice(opt.getAttribute("data-mode")); menu.style.display = "none"; }));
+    opt.addEventListener("click", () => { handleDownloadChoice(opt.getAttribute("data-mode")); menu.hidden = true; }));
 
   $("githubAuthBtn").addEventListener("click", () => {
     location.href = "/api/github/authorize?returnTo=" + encodeURIComponent(location.pathname + location.search);
