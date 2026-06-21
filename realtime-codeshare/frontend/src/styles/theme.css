@@ -1,0 +1,103 @@
+/*
+ * Synchronous Mono design tokens, expressed as RGB channel triples so Tailwind's
+ * `rgb(var(--token) / <alpha-value>)` mapping supports opacity utilities (e.g.
+ * `bg-primary/5`). Dark is the reference theme (matches the delivered mockups);
+ * light is derived from DESIGNER-BRIEF anchors (#FFFFFF/#F3F4F6 surfaces,
+ * #111827 text) with participant + status hues darkened for legibility on white.
+ *
+ * :root holds the light theme; [data-theme="dark"] overrides for dark.
+ */
+
+:root {
+  /* surfaces */
+  --surface-page: 246 247 249;
+  --surface-raised: 255 255 255;
+  --surface-container: 243 244 246;
+  --surface-container-lowest: 255 255 255;
+  --surface-container-low: 249 250 251;
+  --surface-container-high: 237 239 242;
+  --surface-container-highest: 229 231 235;
+  --surface-variant: 229 231 235;
+  --border-subtle: 226 229 234;
+  --outline: 156 163 175;
+  --outline-variant: 209 213 219;
+
+  /* text */
+  --text-primary: 17 24 39;
+  --text-muted: 107 114 128;
+  --on-surface: 17 24 39;
+  --on-surface-variant: 55 65 81;
+
+  /* brand / action */
+  --primary: 0 90 194;
+  --on-primary: 255 255 255;
+  --primary-container: 216 226 255;
+  --secondary: 87 27 193;
+  --on-secondary: 255 255 255;
+  --secondary-container: 233 221 255;
+  --tertiary: 194 87 18;
+
+  /* status */
+  --success: 5 150 105;
+  --danger: 220 38 38;
+  --error: 185 0 10;
+
+  /* editor + inputs */
+  --editor-bg: 255 255 255;
+  --input-bg: 255 255 255;
+
+  /* participant identity (darkened for white backgrounds) */
+  --participant-1: 219 39 119;
+  --participant-2: 5 150 105;
+  --participant-3: 217 119 6;
+  --participant-4: 37 99 235;
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  /* surfaces */
+  --surface-page: 15 17 21;
+  --surface-raised: 28 31 38;
+  --surface-container: 28 32 40;
+  --surface-container-lowest: 10 14 22;
+  --surface-container-low: 24 28 36;
+  --surface-container-high: 38 42 51;
+  --surface-container-highest: 49 53 62;
+  --surface-variant: 49 53 62;
+  --border-subtle: 45 49 58;
+  --outline: 140 144 159;
+  --outline-variant: 66 71 84;
+
+  /* text */
+  --text-primary: 249 250 251;
+  --text-muted: 156 163 175;
+  --on-surface: 223 226 238;
+  --on-surface-variant: 194 198 214;
+
+  /* brand / action */
+  --primary: 173 198 255;
+  --on-primary: 0 26 66;
+  --primary-container: 77 142 255;
+  --secondary: 208 188 255;
+  --on-secondary: 60 0 145;
+  --secondary-container: 87 27 193;
+  --tertiary: 255 183 134;
+
+  /* status */
+  --success: 16 185 129;
+  --danger: 239 68 68;
+  --error: 255 180 171;
+
+  /* editor + inputs */
+  --editor-bg: 10 12 16;
+  --input-bg: 10 12 16;
+
+  /* participant identity (vibrant on dark) */
+  --participant-1: 244 114 182;
+  --participant-2: 52 211 153;
+  --participant-3: 251 191 36;
+  --participant-4: 96 165 250;
+
+  color-scheme: dark;
+}

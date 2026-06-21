@@ -1,16 +1,10 @@
 server:
   port: 8080
 
-spring:
-  thymeleaf:
-    cache: false
-    prefix: classpath:/templates/
-    suffix: .html
-
 codeshare:
   # Comma-separated allowed Origin(s)/patterns for the WS upgrade. Entries may be
   # exact (http://localhost:8080) or wildcard hosts (https://*.ngrok-free.app).
-  allowed-origins: ${CODESHARE_ALLOWED_ORIGINS:http://localhost:8080}
+  allowed-origins: ${CODESHARE_ALLOWED_ORIGINS:http://localhost:8080,https://*.ngrok-free.app,https://*.ngrok-free.dev,https://*.ngrok.app,https://*.ngrok.dev,https://*.ngrok.io}
   session:
     max-rejected-attempts: 3    # rejected joins per identity before a temporary block
     ttl-minutes: 30

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- no favicon; suppress the /favicon.ico request -->
+    <link rel="icon" href="data:," />
+    <title>CodeShare — Real-Time Collaborative Editor</title>
+    <script>
+      // Apply the persisted/OS theme before first paint to avoid a flash.
+      (function () {
+        try {
+          var stored = localStorage.getItem("cs-theme");
+          var dark = stored ? stored === "dark"
+            : window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
