@@ -63,6 +63,21 @@ export async function createSession(name: string, color: string): Promise<Create
   return postJson<CreateSessionResponse>("/api/sessions", { name, color });
 }
 
+export interface TicketResponse {
+  ticket: string;
+  ttlSeconds: number;
+}
+
+/** Mint a single-use connection ticket so the token travels in this POST body
+ *  (over HTTPS) instead of the WebSocket URL. `token` is null for a new joiner. */
+export async function mintTicket(
+  sessionId: string,
+  token: string | null,
+  clientId: string,
+): Promise<TicketResponse> {
+  return postJson<TicketResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/ticket`, { token, clientId });
+}
+
 export async function sessionExists(id: string): Promise<ExistsResponse> {
   const resp = await fetch(`/api/sessions/${encodeURIComponent(id)}/exists`);
   if (!resp.ok) throw new ApiError(`exists check failed (${resp.status})`, resp.status, null);

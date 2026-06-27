@@ -20,7 +20,7 @@ class OTServiceValidationTest {
     }
 
     private void assertRejected(OpDTO dto) {
-        OTService svc = new OTService();
+        OTService svc = new OTService(new com.collabcode.realtime_codeshare.persistence.InMemoryDocumentRepository());
         assertThrows(InvalidOpException.class, () -> svc.applyOp("room", dto));
         // Validation runs before the store is created => no side effect at all.
         assertFalse(svc.hasStore("room"), "rejected op must not create or mutate a store");
@@ -74,7 +74,7 @@ class OTServiceValidationTest {
 
     @Test
     void validOp_isAccepted_andExistingStateSurvivesLaterRejection() {
-        OTService svc = new OTService();
+        OTService svc = new OTService(new com.collabcode.realtime_codeshare.persistence.InMemoryDocumentRepository());
         svc.applyOp("room", op("a", "insert", 0, 0, "Hello", null));
         assertEquals("Hello", svc.getDocument("room"));
         assertEquals(1, svc.getVersion("room"));

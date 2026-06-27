@@ -39,10 +39,11 @@ public class RoomReaper {
     @Scheduled(fixedDelayString = "${codeshare.reaper.interval-ms:60000}")
     public void sweep() {
         long now = System.currentTimeMillis();
+        otService.persistAll();                                // periodic snapshot backstop
         handler.reapIdleRooms(idleTtlMs, now);                 // OT/socket backstop
         List<String> reaped = sessionService.reapIdle(idleTtlMs, now);
         for (String id : reaped) {
-            otService.evict(id);
+            otService.evict(id);                               // drops resident store + persisted snapshot
         }
         if (!reaped.isEmpty()) {
             log.info("Reaper reclaimed {} idle session(s): {}", reaped.size(), reaped);

@@ -3,6 +3,7 @@ package com.collabcode.realtime_codeshare.controller;
 import com.collabcode.realtime_codeshare.model.User;
 import com.collabcode.realtime_codeshare.ot.InvalidOpException;
 import com.collabcode.realtime_codeshare.ot.OTService;
+import com.collabcode.realtime_codeshare.ot.ResyncRequiredException;
 import com.collabcode.realtime_codeshare.ratelimit.TokenBucket;
 import com.collabcode.realtime_codeshare.security.Role;
 import com.collabcode.realtime_codeshare.service.SessionService;
@@ -180,25 +181,38 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         } catch (InvalidOpException e) {
             log.warn("[{}] rejected invalid op: {}", sessionId, e.getMessage());
             return;
+        } catch (ResyncRequiredException e) {
+            // Client is too far behind to transform safely; force it to rebase its
+            // unacked edits onto the authoritative snapshot rather than apply a corrupt op.
+            log.info("[{}] forcing resync for {}: {}", sessionId, session.getId(), e.getMessage());
+            sendResync(session, sessionId, true);
+            return;
         }
-        // Broadcast to everyone including sender — the client advances its pending queue on its own ack.
-        // The hash lets a caught-up client detect drift and request a re-sync.
+        // Broadcast to everyone including sender — the client advances its pending
+        // queue on its own ack. Drift is caught by the idle SHA-256 resync probe,
+        // so no per-op hash is broadcast.
         broadcast(sessionId, json(Map.of(
                 "type", "op",
                 "op", result.getTransformedOp(),
-                "version", result.getNewVersion(),
-                "hash", result.getDocHash())), null);
+                "version", result.getNewVersion())), null);
     }
 
     /** A caught-up client that detected drift asks for the authoritative document. */
     private void handleResync(WebSocketSession session, String sessionId) {
+        sendResync(session, sessionId, false);
+        log.info("Session {}: re-synced a drifted client", sessionId);
+    }
+
+    /** Send the authoritative snapshot. {@code required} marks a server-forced resync
+     *  (the client must rebase its unacked edits), vs a routine idle self-heal. */
+    private void sendResync(WebSocketSession session, String sessionId, boolean required) {
         OTService.Snapshot snap = otService.snapshot(sessionId);
         sendJson(session, Map.of(
                 "type", "resync",
                 "document", snap.document(),
                 "version", snap.version(),
-                "hash", snap.docHash()));
-        log.info("Session {}: re-synced a drifted client", sessionId);
+                "hash", snap.docHash(),
+                "required", required));
     }
 
     private void handleCursor(WebSocketSession session, String sessionId, JsonNode node) {
@@ -304,16 +318,18 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         log.info("Session {}: {} disconnected", sessionId, clientId);
     }
 
-    /** Last admitted client left: drop the OT document and per-room maps. The Session
-     *  (access list) is kept alive for reconnection and reclaimed later by the reaper. */
+    /** Last admitted client left: persist a snapshot and keep the document resident
+     *  (not evicted) so a transient disconnect-reconnect serves the real document, not
+     *  an empty one. The Session and its document are reclaimed together by the reaper
+     *  once the idle TTL elapses. */
     private void onRoomEmpty(String sessionId) {
         roomClients.remove(sessionId);
         cursorPositions.remove(sessionId);
         lastActivity.remove(sessionId);
-        otService.evict(sessionId);
+        otService.persist(sessionId);
         // Nobody can approve queued joiners now; release them.
         closeAll(pendingSockets.remove(sessionId), "host left");
-        log.info("Room {} has no admitted clients -> document evicted", sessionId);
+        log.info("Room {} has no admitted clients -> snapshot persisted, document retained", sessionId);
     }
 
     /** Backstop sweep for the reaper: evict any room left empty and idle. */

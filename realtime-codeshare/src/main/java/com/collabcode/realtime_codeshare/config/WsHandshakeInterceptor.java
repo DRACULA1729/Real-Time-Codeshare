@@ -2,6 +2,8 @@ package com.collabcode.realtime_codeshare.config;
 
 import com.collabcode.realtime_codeshare.model.Session;
 import com.collabcode.realtime_codeshare.service.SessionService;
+import com.collabcode.realtime_codeshare.ticket.Ticket;
+import com.collabcode.realtime_codeshare.ticket.TicketStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -19,8 +21,12 @@ import java.util.Map;
 /**
  * Validates the handshake before the socket opens. A connection with a missing,
  * malformed, or unknown {@code sessionId} is refused at the upgrade — so no room
- * is ever auto-created and there is no shared "default" fallback. Query params
- * are parsed once here into session attributes for the handler.
+ * is ever auto-created and there is no shared "default" fallback.
+ *
+ * <p>The session token never appears in the URL (CWE-598). The client mints a
+ * single-use ticket over an authenticated HTTPS POST; this interceptor redeems it
+ * to recover the real {sessionId, token, clientId} binding. Only the opaque ticket
+ * and non-secret name/color ride the upgrade query string.
  */
 @Component
 public class WsHandshakeInterceptor implements HandshakeInterceptor {
@@ -28,9 +34,11 @@ public class WsHandshakeInterceptor implements HandshakeInterceptor {
     private static final Logger log = LoggerFactory.getLogger(WsHandshakeInterceptor.class);
 
     private final SessionService sessionService;
+    private final TicketStore ticketStore;
 
-    public WsHandshakeInterceptor(SessionService sessionService) {
+    public WsHandshakeInterceptor(SessionService sessionService, TicketStore ticketStore) {
         this.sessionService = sessionService;
+        this.ticketStore = ticketStore;
     }
 
     @Override
@@ -45,12 +53,21 @@ public class WsHandshakeInterceptor implements HandshakeInterceptor {
             return false;
         }
 
-        String token = q.get("token");
+        // Redeem the single-use connection ticket; reject if missing/expired/consumed
+        // or bound to a different room.
+        Ticket ticket = ticketStore.redeem(q.get("ticket"));
+        if (ticket == null || !sessionId.equals(ticket.sessionId())) {
+            log.warn("Rejecting handshake for session {}: invalid or expired ticket", sessionId);
+            response.setStatusCode(HttpStatus.UNAUTHORIZED);
+            return false;
+        }
+
+        String token = ticket.token();
         attributes.put("sessionId", sessionId);
-        attributes.put("token", token);
-        attributes.put("clientId", q.get("clientId"));
-        attributes.put("name", q.get("name"));
-        attributes.put("color", q.get("color"));
+        attributes.put("token", token);                  // from the ticket, never the URL
+        attributes.put("clientId", ticket.clientId());   // from the ticket
+        attributes.put("name", q.get("name"));           // non-secret
+        attributes.put("color", q.get("color"));         // non-secret
 
         Session session = sessionService.get(sessionId);
         attributes.put("roleIntent", (token != null && session != null && session.isAdmin(token)) ? "CREATOR" : "JOINER");

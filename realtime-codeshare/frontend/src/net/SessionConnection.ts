@@ -1,6 +1,7 @@
 import type { Op } from "../ot/ops";
 import { OtClient } from "../ot/client";
-import { strHash } from "../ot/hash";
+import { sha256Hex } from "../ot/hash";
+import { mintTicket } from "../api/client";
 import {
   normalizeOp,
   type PresenceUser,
@@ -83,14 +84,31 @@ export class SessionConnection {
   }
 
   connect(): void {
+    // Fire-and-forget: mint a single-use ticket (token in the POST body, not the
+    // URL), then open the socket carrying only the opaque ticket.
+    void this.openWithTicket();
+  }
+
+  private async openWithTicket(): Promise<void> {
+    let ticket: string;
+    try {
+      ticket = (await mintTicket(this.sessionId, this.token, this.clientId)).ticket;
+    } catch {
+      // Session gone, or the ticket request failed — surface it the same way a
+      // failed upgrade would (unavailable before admission, disconnected after).
+      this.onClose();
+      return;
+    }
+    if (this.intentionalClose) return; // closed while the ticket was in flight
+
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const params = new URLSearchParams({
       sessionId: this.sessionId,
       clientId: this.clientId,
       name: this.name,
       color: this.color,
+      ticket,
     });
-    if (this.token) params.set("token", this.token);
     const ws = new WebSocket(`${proto}//${location.host}/ws/ot?${params.toString()}`);
     this.ws = ws;
     ws.onmessage = (ev) => this.onMessage(ev);
@@ -157,7 +175,7 @@ export class SessionConnection {
         if (this.ot.isQuiescent()) this.scheduleProbe();
         break;
       case "resync":
-        this.handleResync(msg.document || "", msg.version || 0, msg.hash);
+        this.handleResync(msg.document || "", msg.version || 0, msg.hash, msg.required ?? false);
         break;
       case "cursor":
         if (msg.clientId !== this.clientId) this.h.onCursor(msg.clientId, msg.pos);
@@ -201,13 +219,28 @@ export class SessionConnection {
     }
   }
 
-  // Self-heal: only adopt the authoritative copy if we're still caught up and
-  // actually diverged, so we never clobber edits made while the resync was in
-  // flight. Re-arm the probe until the hashes stabilize.
-  private handleResync(document: string, version: number, hash: number): void {
+  // Two resync flavors:
+  //  - required: the server forced it (our base fell below the compaction floor).
+  //    Capture unacked local edits, adopt the authoritative snapshot, then replay
+  //    those edits — applied locally and re-sent from the new base — so they're
+  //    rebased onto the server doc instead of being silently dropped.
+  //  - routine self-heal: only adopt the snapshot if we're still caught up and
+  //    actually diverged (SHA-256 mismatch), so we never clobber edits made while
+  //    the resync was in flight.
+  private handleResync(document: string, version: number, hash: string, required: boolean): void {
+    if (required) {
+      const pending = this.ot.capturePending();
+      this.docHost?.replaceText(document);
+      this.ot.reset(version);
+      for (const op of pending) this.docHost?.applyRemote(op); // reflect locally
+      for (const op of pending) this.ot.submitLocal(op);       // re-issue from the new base
+      this.h.onResyncDoc(document, version);
+      this.scheduleProbe();
+      return;
+    }
     if (!this.ot.isQuiescent()) return;
     const local = this.docHost?.getText() ?? "";
-    if (typeof hash === "number" && strHash(local) === hash) return;
+    if (sha256Hex(local) === hash) return;
     this.docHost?.replaceText(document);
     this.ot.reset(version);
     this.h.onResyncDoc(document, version);

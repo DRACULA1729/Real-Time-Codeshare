@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyToString, type Op } from "./ops";
 import { transform } from "./transform";
-import { strHash } from "./hash";
+import { sha256Hex } from "./hash";
 import { OtClient } from "./client";
 
 const clone = <T>(o: T): T => JSON.parse(JSON.stringify(o));
@@ -104,7 +104,7 @@ function expectConverged(server: ServerSim, clients: ClientSim[]) {
 // is the documented safety net that restores convergence.
 function reconcileViaResync(server: ServerSim, clients: ClientSim[]) {
   for (const c of clients) {
-    if (c.ot.isQuiescent() && strHash(c.doc) !== strHash(server.doc)) {
+    if (c.ot.isQuiescent() && sha256Hex(c.doc) !== sha256Hex(server.doc)) {
       c.doc = server.doc;
       c.ot.reset(server.version);
     }
@@ -128,14 +128,17 @@ describe("transform — pure properties", () => {
   });
 });
 
-describe("strHash — matches Java String.hashCode", () => {
+describe("sha256Hex — matches Java MessageDigest(SHA-256)", () => {
+  // FIPS 180-4 / Java-identical known-answer vectors. Pinning these keeps the
+  // client digest byte-for-byte equal to the server's, so drift detection agrees.
   it.each([
-    ["", 0],
-    ["a", 97],
-    ["hello", 99162322],
-    ["Write your code here...", "Write your code here...".split("").reduce((h, ch) => (Math.imul(31, h) + ch.charCodeAt(0)) | 0, 0)],
-  ])("hash(%j) = %i", (input, expected) => {
-    expect(strHash(input as string)).toBe(expected as number);
+    ["", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"],
+    ["abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"],
+    ["hello", "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"],
+    // Multi-byte UTF-8 must encode identically to Java's getBytes(UTF_8).
+    ["héllo→€", "64a6ddc26703e014800f40bfa72279d5ccfcfebff26545b93ed1403ebb5ab057"],
+  ])("sha256(%j) = %s", (input, expected) => {
+    expect(sha256Hex(input as string)).toBe(expected as string);
   });
 });
 

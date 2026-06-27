@@ -1,9 +1,13 @@
 package com.collabcode.realtime_codeshare.ot;
 
+import com.collabcode.realtime_codeshare.persistence.DocumentRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -15,6 +19,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * version counter, and a bounded op history. The transform-and-apply step is a
  * single critical section inside {@link DocumentStore#commit(Op)} so concurrent
  * edits can never observe a half-applied state.
+ *
+ * <p>A {@link DocumentRepository} decouples document lifetime from connected
+ * clients: stores are seeded from a persisted snapshot on a cache miss and
+ * snapshotted when a room empties, so a transient disconnect or a restart no
+ * longer serves an empty document.
  */
 @Service
 public class OTService {
@@ -25,13 +34,40 @@ public class OTService {
     static final int MAX_OP_LEN = 65_536;
 
     private final Map<String, DocumentStore> sessions = new ConcurrentHashMap<>();
+    private final DocumentRepository repository;
+
+    public OTService(DocumentRepository repository) {
+        this.repository = repository;
+    }
 
     public DocumentStore getOrCreateStore(String sessionId) {
-        return sessions.computeIfAbsent(sessionId, k -> new DocumentStore());
+        return sessions.computeIfAbsent(sessionId, k -> {
+            DocumentStore store = new DocumentStore();
+            // Load-on-miss: a reconnect after the room emptied (or a restart with a
+            // durable repository) rehydrates the real document instead of a blank one.
+            repository.load(k).ifPresent(snap -> store.seed(snap.text(), snap.version()));
+            return store;
+        });
     }
 
     public boolean hasStore(String sessionId) {
         return sessions.containsKey(sessionId);
+    }
+
+    /** Persist the current snapshot of a resident room (on-empty / periodic save). */
+    public void persist(String sessionId) {
+        DocumentStore store = sessions.get(sessionId);
+        if (store == null) return;
+        Snapshot snap = store.snapshot();
+        repository.save(sessionId, snap.document(), snap.version());
+    }
+
+    /** Snapshot every resident room — periodic backstop so a crash loses at most one interval. */
+    public void persistAll() {
+        sessions.forEach((id, store) -> {
+            Snapshot snap = store.snapshot();
+            repository.save(id, snap.document(), snap.version());
+        });
     }
 
     /**
@@ -48,11 +84,13 @@ public class OTService {
         return result;
     }
 
-    /** Drop a room's entire OT state. Called when a room empties or is reaped. */
+    /** Drop a room's entire OT state, including its persisted snapshot. Called when
+     *  a room is ended by the admin or fully reaped after the idle TTL. */
     public void evict(String sessionId) {
         if (sessions.remove(sessionId) != null) {
             log.info("Evicted document store for session {}", sessionId);
         }
+        repository.delete(sessionId);
     }
 
     public String getDocument(String sessionId) {
@@ -269,6 +307,9 @@ public class OTService {
         private final StringBuilder doc = new StringBuilder();
         private final List<CommittedOp> history = new ArrayList<>();
         private final AtomicInteger version = new AtomicInteger(0);
+        /** Highest version whose op has been compacted away; an op based at or below
+         *  this can no longer be transformed correctly and must force a re-sync. */
+        private int compactedThroughVersion = 0;
 
         public synchronized int getVersion() { return version.get(); }
 
@@ -276,15 +317,32 @@ public class OTService {
 
         public synchronized int historySize() { return history.size(); }
 
+        /** Rehydrate a fresh store from a persisted snapshot. History starts empty,
+         *  so any op based before this version is treated as below the floor. */
+        public synchronized void seed(String text, int atVersion) {
+            doc.setLength(0);
+            doc.append(text == null ? "" : text);
+            version.set(atVersion);
+            history.clear();
+            compactedThroughVersion = atVersion;
+        }
+
         /**
          * Transform the incoming op against every op committed since its base
          * version, apply it to the document, bump the version, and append it to
          * history — all under this store's monitor so the
          * version/history/document invariant can never be observed mid-update.
+         *
+         * @throws ResyncRequiredException if the op's base version is below the
+         *         compaction floor, where the history needed to transform it is gone.
          */
         public synchronized ApplyResult commit(Op incoming) {
-            Op transformed = incoming.copy();
             int base = incoming.getBaseVersion();
+            if (base < compactedThroughVersion) {
+                throw new ResyncRequiredException(
+                        "baseVersion " + base + " below compaction floor " + compactedThroughVersion);
+            }
+            Op transformed = incoming.copy();
             for (CommittedOp co : history) {
                 if (co.version > base) {
                     transformed = OTEngine.transform(transformed, co.op);
@@ -305,24 +363,43 @@ public class OTService {
 
             if (history.size() > MAX_HISTORY) {
                 // Drop the oldest ops; clients at the bleeding edge stay correct,
-                // very stale clients re-sync via init. Precise snapshotting later.
+                // ones below the new floor are forced to re-sync (see commit guard).
                 compactBelow(newVersion - MAX_HISTORY);
             }
-            return new ApplyResult(newVersion, transformed, doc.toString().hashCode());
+            return new ApplyResult(newVersion, transformed);
         }
 
-        /** Atomic (document, version, hash) snapshot for re-sync. */
+        /** Atomic (document, version, SHA-256 digest) snapshot for re-sync. The
+         *  digest is computed here (on the quiescent probe / resync exchange) rather
+         *  than on every op, so its cost is bounded. */
         public synchronized Snapshot snapshot() {
             String d = doc.toString();
-            return new Snapshot(d, version.get(), d.hashCode());
+            return new Snapshot(d, version.get(), sha256Hex(d));
         }
 
         /**
-         * Seam for snapshot-based compaction: discard every committed op at or
-         * below {@code version}. Safe only for ops no client will still rebase on.
+         * Discard every committed op at or below {@code version} and raise the
+         * compaction floor accordingly.
          */
         public synchronized void compactBelow(int version) {
             history.removeIf(co -> co.version <= version);
+            if (version > compactedThroughVersion) compactedThroughVersion = version;
+        }
+    }
+
+    /** Lowercase hex SHA-256 of the UTF-8 bytes — identical on the Java and TS sides. */
+    public static String sha256Hex(String s) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest((s == null ? "" : s).getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+                hex.append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e); // never on a standard JRE
         }
     }
 
@@ -340,23 +417,20 @@ public class OTService {
     public static class ApplyResult {
         public int newVersion;
         public Op transformedOp;
-        public int docHash;
 
         public ApplyResult() {}
 
-        public ApplyResult(int newVersion, Op transformedOp, int docHash) {
+        public ApplyResult(int newVersion, Op transformedOp) {
             this.newVersion = newVersion;
             this.transformedOp = transformedOp;
-            this.docHash = docHash;
         }
 
         public int getNewVersion() { return newVersion; }
         public Op getTransformedOp() { return transformedOp; }
-        public int getDocHash() { return docHash; }
     }
 
-    /** Immutable (document, version, hash) snapshot of a store. */
-    public record Snapshot(String document, int version, int docHash) {}
+    /** Immutable (document, version, SHA-256 hex digest) snapshot of a store. */
+    public record Snapshot(String document, int version, String docHash) {}
 
     public Snapshot snapshot(String sessionId) {
         return getOrCreateStore(sessionId).snapshot();

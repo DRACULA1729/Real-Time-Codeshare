@@ -22,13 +22,13 @@ export interface OpMsg {
   type: "op";
   op: OpWire;
   version: number;
-  hash: number;
 }
 export interface ResyncMsg {
   type: "resync";
   document: string;
   version: number;
-  hash: number;
+  hash: string; // SHA-256 hex; matches sha256Hex() on the client
+  required?: boolean; // server-forced resync (client must rebase its unacked edits)
 }
 export interface CursorMsg {
   type: "cursor";

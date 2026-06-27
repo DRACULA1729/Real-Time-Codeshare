@@ -32,6 +32,15 @@ export class OtClient {
     return this.outstanding === null && this.buffer.length === 0;
   }
 
+  /** Un-acked local ops in order (outstanding first, then buffered), for resync
+   *  replay. Returned as copies so the caller can re-submit them after a reset. */
+  capturePending(): Op[] {
+    const ops: Op[] = [];
+    if (this.outstanding) ops.push({ ...this.outstanding });
+    for (const op of this.buffer) ops.push({ ...op });
+    return ops;
+  }
+
   /** A local edit produced by the editor. Sent immediately if nothing is in
    *  flight, otherwise queued. */
   submitLocal(op: Op): void {
