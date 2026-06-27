@@ -1,19 +1,33 @@
 server:
   port: 8080
+  # Honor X-Forwarded-* from the TLS-terminating proxy/LB: affects secure-cookie
+  # decisions, redirect URIs, and the client IP used for per-IP rate limiting.
+  forward-headers-strategy: framework
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        # secure is false here so local HTTP works; the prod profile sets it true.
+        secure: false
 
 codeshare:
-  # Comma-separated allowed Origin(s)/patterns for the WS upgrade. Entries may be
-  # exact (http://localhost:8080) or wildcard hosts (https://*.ngrok-free.app).
-  allowed-origins: ${CODESHARE_ALLOWED_ORIGINS:http://localhost:8080,https://*.ngrok-free.app,https://*.ngrok-free.dev,https://*.ngrok.app,https://*.ngrok.dev,https://*.ngrok.io}
+  # Comma-separated allowed Origin(s)/patterns for the WS upgrade. Defaults to
+  # localhost only; the dev profile adds the Vite port + ngrok wildcards, and prod
+  # requires operators to set CODESHARE_ALLOWED_ORIGINS to the exact origin.
+  allowed-origins: ${CODESHARE_ALLOWED_ORIGINS:http://localhost:8080}
   session:
     max-rejected-attempts: 3    # rejected joins per identity before a temporary block
     ttl-minutes: 30
+    max-active: 10000           # global cap on live sessions (memory-DoS guard)
   room:
     idle-ttl-ms: 1800000        # reclaim empty rooms idle longer than 30 min
   reaper:
     interval-ms: 60000          # idle-room sweep cadence
   rate:
     ops-per-sec: 50             # per-connection op rate limit
+    cursors-per-sec: 30         # per-connection cursor rate limit (anti-amplification)
+    session-create-per-min: 20  # per-IP POST /api/sessions rate limit
   ws:
     max-message-bytes: 65536    # inbound frame size cap
 

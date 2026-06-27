@@ -1,0 +1,23 @@
+# Production profile. Activate with: --spring.profiles.active=prod
+# Assumes TLS is terminated at a reverse proxy / load balancer that forwards
+# X-Forwarded-* (forward-headers-strategy=framework is set in the base profile).
+#
+# Required environment (the startup check in StartupConfig fails fast if missing):
+#   CODESHARE_ALLOWED_ORIGINS   exact prod origin(s), e.g. https://codeshare.example.com
+#   GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET / GITHUB_REDIRECT_URI   (only if GitHub push is enabled)
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true          # cookies only over HTTPS
+        same-site: lax
+        http-only: true
+
+codeshare:
+  # No localhost fallback in prod — must be set explicitly to the real origin(s).
+  allowed-origins: ${CODESHARE_ALLOWED_ORIGINS}
+
+logging:
+  level:
+    root: INFO
+    com.collabcode.realtime_codeshare: INFO

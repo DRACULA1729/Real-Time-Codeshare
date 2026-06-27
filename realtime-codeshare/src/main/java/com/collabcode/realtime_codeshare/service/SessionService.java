@@ -66,6 +66,9 @@ public class SessionService {
 
     public boolean exists(String id) { return sessions.containsKey(id); }
 
+    /** Number of live sessions (for the global active-session cap). */
+    public int count() { return sessions.size(); }
+
     public boolean isAlive(String id) {
         Session s = sessions.get(id);
         return s != null && !s.getActiveOrder().isEmpty();

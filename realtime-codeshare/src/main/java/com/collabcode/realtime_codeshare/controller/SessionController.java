@@ -1,8 +1,13 @@
 package com.collabcode.realtime_codeshare.controller;
 
 import com.collabcode.realtime_codeshare.model.Session;
+import com.collabcode.realtime_codeshare.ratelimit.RateLimiter;
 import com.collabcode.realtime_codeshare.service.SessionService;
 import com.collabcode.realtime_codeshare.ticket.TicketStore;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Size;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -12,7 +17,9 @@ import java.util.Map;
 
 /**
  * Session lifecycle REST API. {@code POST /api/sessions} is the only path that
- * mints a session id — WebSocket upgrades never create rooms.
+ * mints a session id — WebSocket upgrades never create rooms. Creation is
+ * unauthenticated, so it is per-IP rate limited and globally capped to prevent a
+ * memory-exhaustion DoS (CWE-770).
  */
 @RestController
 @RequestMapping("/api/sessions")
@@ -20,14 +27,23 @@ public class SessionController {
 
     private final SessionService sessionService;
     private final TicketStore ticketStore;
+    private final RateLimiter createRateLimiter;
+    private final int maxActiveSessions;
 
-    public SessionController(SessionService sessionService, TicketStore ticketStore) {
+    public SessionController(SessionService sessionService,
+                            TicketStore ticketStore,
+                            RateLimiter createRateLimiter,
+                            @Value("${codeshare.session.max-active:10000}") int maxActiveSessions) {
         this.sessionService = sessionService;
         this.ticketStore = ticketStore;
+        this.createRateLimiter = createRateLimiter;
+        this.maxActiveSessions = maxActiveSessions;
     }
 
     public static class CreateRequest {
+        @Size(max = 80, message = "name too long")
         public String name;
+        @Size(max = 40, message = "color too long")
         public String color;
     }
 
@@ -38,7 +54,16 @@ public class SessionController {
     }
 
     @PostMapping
-    public ResponseEntity<?> create(@RequestBody(required = false) CreateRequest req) {
+    public ResponseEntity<?> create(@Valid @RequestBody(required = false) CreateRequest req,
+                                    HttpServletRequest request) {
+        // Per-IP throttle (remote addr honors X-Forwarded-For via forward-headers-strategy).
+        if (!createRateLimiter.tryAcquire(request.getRemoteAddr())) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "too many sessions created; slow down");
+        }
+        // Global capacity guard.
+        if (sessionService.count() >= maxActiveSessions) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "server at session capacity; try again later");
+        }
         String name = req == null ? null : req.name;
         String color = req == null ? null : req.color;
         Session session = sessionService.createSession(name, color);

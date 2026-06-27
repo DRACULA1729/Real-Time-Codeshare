@@ -51,11 +51,13 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
     private static final String ATTR_JOIN_KEY = "joinKey";
     private static final String ATTR_ADMITTED = "admitted";
     private static final String ATTR_BUCKET = "bucket";
+    private static final String ATTR_CURSOR_BUCKET = "cursorBucket";
 
     private final OTService otService;
     private final SessionService sessionService;
     private final ObjectMapper mapper = new ObjectMapper();
     private final int opsPerSec;
+    private final int cursorsPerSec;
 
     // sessionId -> (wsId -> decorated socket). Admitted clients only.
     private final Map<String, Map<String, WebSocketSession>> roomClients = new ConcurrentHashMap<>();
@@ -68,10 +70,12 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
 
     public OTWebSocketHandler(OTService otService,
                               SessionService sessionService,
-                              @Value("${codeshare.rate.ops-per-sec:50}") int opsPerSec) {
+                              @Value("${codeshare.rate.ops-per-sec:50}") int opsPerSec,
+                              @Value("${codeshare.rate.cursors-per-sec:30}") int cursorsPerSec) {
         this.otService = otService;
         this.sessionService = sessionService;
         this.opsPerSec = opsPerSec;
+        this.cursorsPerSec = cursorsPerSec;
     }
 
     @Override
@@ -83,6 +87,7 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         }
         WebSocketSession session = new ConcurrentWebSocketSessionDecorator(raw, SEND_TIME_LIMIT_MS, SEND_BUFFER_BYTES);
         raw.getAttributes().put(ATTR_BUCKET, new TokenBucket(opsPerSec));
+        raw.getAttributes().put(ATTR_CURSOR_BUCKET, new TokenBucket(cursorsPerSec));
 
         String clientId = attr(raw, ATTR_CLIENT_ID);
         SessionService.JoinResult jr = sessionService.evaluateJoin(
@@ -216,11 +221,17 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void handleCursor(WebSocketSession session, String sessionId, JsonNode node) {
+        // Cursor floods amplify room-wide, so they get their own budget; drop silently
+        // when exceeded (a dropped cursor frame is cosmetic, unlike a dropped edit).
+        TokenBucket bucket = (TokenBucket) session.getAttributes().get(ATTR_CURSOR_BUCKET);
+        if (bucket != null && !bucket.tryAcquire()) return;
+
         String clientId = attr(session, ATTR_CLIENT_ID);
         if (clientId == null || !node.has("pos")) return;
-        cursorPositions.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>())
-                .put(clientId, node.get("pos").asInt());
-        broadcast(sessionId, node.toString(), session.getId());
+        int pos = Math.max(0, node.get("pos").asInt());
+        cursorPositions.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>()).put(clientId, pos);
+        // Reserialize to a known {type,clientId,pos} shape — never relay raw client JSON.
+        broadcast(sessionId, json(Map.of("type", "cursor", "clientId", clientId, "pos", pos)), session.getId());
     }
 
     // ---------------- admin actions ----------------

@@ -35,10 +35,18 @@ export interface GitHubPushResponse {
   htmlUrl: string;
 }
 
+// Double-submit CSRF: echo the JS-readable XSRF-TOKEN cookie in a request header.
+// The backend sets the cookie on first contact and requires the header on unsafe
+// /api requests.
+function csrfHeaders(base: Record<string, string> = {}): Record<string, string> {
+  const m = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+  return m ? { ...base, "X-CSRF-Token": decodeURIComponent(m[1]) } : base;
+}
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: csrfHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
   const data = (await resp.json().catch(() => ({}))) as T & { error?: string };
@@ -97,7 +105,7 @@ export const github = {
   },
 
   async disconnect(): Promise<void> {
-    await fetch("/api/github/disconnect", { method: "POST" });
+    await fetch("/api/github/disconnect", { method: "POST", headers: csrfHeaders() });
   },
 
   async push(req: GitHubPushRequest): Promise<GitHubPushResponse> {
