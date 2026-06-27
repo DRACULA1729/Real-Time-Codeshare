@@ -103,7 +103,12 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             raw.close(CloseStatus.BAD_DATA);
             return;
         }
-        WebSocketSession session = new ConcurrentWebSocketSessionDecorator(raw, SEND_TIME_LIMIT_MS, SEND_BUFFER_BYTES);
+        // TERMINATE: a peer that can't keep up (send buffer/time limit exceeded) is
+        // closed rather than blocking the room's fan-out — no head-of-line stall on one
+        // slow client (P2-2). The decorator serializes sends per session, preserving order.
+        WebSocketSession session = new ConcurrentWebSocketSessionDecorator(
+                raw, SEND_TIME_LIMIT_MS, SEND_BUFFER_BYTES,
+                ConcurrentWebSocketSessionDecorator.OverflowStrategy.TERMINATE);
         raw.getAttributes().put(ATTR_BUCKET, new TokenBucket(opsPerSec));
         raw.getAttributes().put(ATTR_CURSOR_BUCKET, new TokenBucket(cursorsPerSec));
 
