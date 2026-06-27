@@ -64,8 +64,11 @@ public class WsHandshakeInterceptor implements HandshakeInterceptor {
         attributes.put("sessionId", sessionId);
         attributes.put("token", ticket.token());          // from the ticket, never the URL
         attributes.put("clientId", ticket.clientId());    // from the ticket
-        attributes.put("name", q.get("name"));            // non-secret
-        attributes.put("color", q.get("color"));          // non-secret
+        // Sanitize name/color here so the values seeded into WS attributes (and later
+        // fanned out in presence/joinRequest broadcasts) are already bounded/validated,
+        // not the raw query string.
+        attributes.put("name", SessionService.safeName(q.get("name")));
+        attributes.put("color", SessionService.safeColor(q.get("color")));
         return true;
     }
 

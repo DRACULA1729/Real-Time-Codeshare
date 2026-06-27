@@ -14,6 +14,13 @@ codeshare:
     https://*.ngrok.dev,
     https://*.ngrok.io
 
+# Local convenience: expose metrics on the main port for inspection.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+
 logging:
   level:
     com.collabcode.realtime_codeshare: DEBUG

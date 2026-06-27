@@ -5,11 +5,8 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
-import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -27,9 +24,10 @@ import java.util.Set;
  * <p>GET/HEAD/OPTIONS are exempt (safe). The WebSocket upgrade ({@code GET /ws/ot})
  * is exempt and independently gated by the single-use connection ticket. Combined
  * with {@code SameSite=Lax} cookies this is defense-in-depth.
+ *
+ * <p>Registered with an explicit order in {@code FilterConfig} (not via @Component)
+ * so it runs after the security-headers filter, deterministically.
  */
-@Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 20)
 public class CsrfFilter extends OncePerRequestFilter {
 
     static final String COOKIE = "XSRF-TOKEN";
@@ -44,13 +42,17 @@ public class CsrfFilter extends OncePerRequestFilter {
         String token = readCookie(req);
         if (token == null) {
             token = randomToken();
-            ResponseCookie cookie = ResponseCookie.from(COOKIE, token)
-                    .path("/")
-                    .httpOnly(false)            // the SPA must read it to echo it back
-                    .secure(req.isSecure())     // Secure over HTTPS (honors X-Forwarded-Proto)
-                    .sameSite("Lax")
-                    .build();
-            resp.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+            // Only mint the cookie on navigational/API responses, not on every static
+            // asset (which would emit several competing Set-Cookie on a parallel load).
+            if (shouldIssueCookie(req)) {
+                ResponseCookie cookie = ResponseCookie.from(COOKIE, token)
+                        .path("/")
+                        .httpOnly(false)            // the SPA must read it to echo it back
+                        .secure(req.isSecure())     // Secure over HTTPS (honors X-Forwarded-Proto)
+                        .sameSite("Lax")
+                        .build();
+                resp.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+            }
         }
 
         if (requiresCheck(req)) {
@@ -68,6 +70,16 @@ public class CsrfFilter extends OncePerRequestFilter {
         if (SAFE.contains(req.getMethod())) return false;
         String path = req.getRequestURI();
         return path != null && path.startsWith("/api/");
+    }
+
+    /** Issue the token cookie on the document and API responses, not on static assets. */
+    private boolean shouldIssueCookie(HttpServletRequest req) {
+        String path = req.getRequestURI();
+        if (path == null || path.equals("/") || path.startsWith("/api/")) return true;
+        return !(path.startsWith("/assets/")
+                || path.endsWith(".js") || path.endsWith(".css") || path.endsWith(".ico")
+                || path.endsWith(".woff") || path.endsWith(".woff2")
+                || path.endsWith(".png") || path.endsWith(".svg") || path.endsWith(".map"));
     }
 
     private String readCookie(HttpServletRequest req) {

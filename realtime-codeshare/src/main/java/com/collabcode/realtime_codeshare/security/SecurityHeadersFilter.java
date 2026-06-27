@@ -4,9 +4,6 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -21,9 +18,10 @@ import java.io.IOException;
  * dynamic colors via inline {@code style} attributes (cursor flags, avatars), which
  * a nonce can't cover. Inline style injection is low risk versus script; script-src
  * stays strict {@code 'self'} (the theme bootstrap was externalized to enable this).
+ *
+ * <p>Registered with an explicit order in {@code FilterConfig} (not via @Component)
+ * so the security filter-chain position is deterministic.
  */
-@Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class SecurityHeadersFilter extends OncePerRequestFilter {
 
     private static final String CSP = String.join("; ",

@@ -57,6 +57,24 @@ class WsHandshakeInterceptorTest {
     }
 
     @Test
+    void nameAndColorAreSanitizedBeforeBeingSeeded() {
+        SessionService ss = mock(SessionService.class);
+        when(ss.exists(SID)).thenReturn(true);
+        TicketStore ts = mock(TicketStore.class);
+        when(ts.redeem("good")).thenReturn(new Ticket(SID, "tok", "c1"));
+
+        String longName = "x".repeat(200);
+        Fixture f = fixture("sessionId=" + SID + "&clientId=c1&name=" + longName + "&color=red&ticket=good", ss, ts);
+        boolean ok = f.interceptor().beforeHandshake(f.req(), f.resp(), null, f.attrs());
+
+        assertThat(ok).isTrue();
+        // Name is length-capped and color falls back to the default hex — so the
+        // values later broadcast in presence/joinRequest are already sanitized.
+        assertThat((String) f.attrs().get("name")).hasSize(40);
+        assertThat(f.attrs().get("color")).isEqualTo("#7aa2f7");
+    }
+
+    @Test
     void missingOrInvalidTicketIsRejectedUnauthorized() {
         SessionService ss = mock(SessionService.class);
         when(ss.exists(SID)).thenReturn(true);

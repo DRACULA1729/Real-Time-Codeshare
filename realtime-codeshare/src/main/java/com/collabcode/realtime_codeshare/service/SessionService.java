@@ -249,13 +249,15 @@ public class SessionService {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(b);
     }
 
-    private static String safeName(String name) {
+    /** Bound and default a display name. Public so the handshake interceptor can
+     *  sanitize before the raw value is ever seeded into WS attributes / broadcast. */
+    public static String safeName(String name) {
         if (name == null || name.isBlank()) return "Anonymous";
         return name.length() > 40 ? name.substring(0, 40) : name;
     }
 
-    private static String safeColor(String color) {
-        // Defense-in-depth: only accept a hex color, never store/relay arbitrary text.
+    /** Defense-in-depth: only accept a hex color, never store/relay arbitrary text. */
+    public static String safeColor(String color) {
         return (color != null && COLOR_FORMAT.matcher(color).matches()) ? color : DEFAULT_COLOR;
     }
 }

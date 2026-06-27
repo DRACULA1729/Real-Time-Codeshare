@@ -71,17 +71,25 @@ The `prod` profile refuses to start (clear message) if these are missing/wrong:
 | `GITHUB_REDIRECT_URI` | if GitHub configured | Public **https** callback (not localhost) |
 | `MANAGEMENT_PORT` | optional (default 9091) | Internal port for actuator |
 | `SERVER_PORT` | optional (default 8080) | Public listener |
+| `TRUSTED_PROXIES` | optional | Regex of proxy IPs allowed to set `X-Forwarded-*` (default: private ranges + loopback) |
 
-TLS is terminated at the proxy/LB; the app honors `X-Forwarded-*`
-(`forward-headers-strategy=framework`) for secure-cookie and client-IP decisions.
+TLS is terminated at the proxy/LB. In `prod` the app honors `X-Forwarded-*`
+**only from `TRUSTED_PROXIES`** (Tomcat `RemoteIpValve`), for secure-cookie and
+client-IP (rate-limit) decisions. The proxy **must overwrite, not append**,
+`X-Forwarded-For`, or a client could spoof its IP and bypass the per-IP limit. The
+default (base) profile trusts no forwarded headers, so a directly-exposed instance
+rate-limits on the real socket IP.
 
 ## Observability
 
 - `GET /actuator/health` — liveness/readiness probes (`/health/liveness`, `/health/readiness`).
-- `GET /actuator/prometheus` — metrics, including `codeshare_sessions_active`,
+- Metrics (`/actuator/prometheus`, `/actuator/metrics`) include `codeshare_sessions_active`,
   `codeshare_rooms_live`, `codeshare_ws_connections`, `codeshare_ops_committed_total`,
   `codeshare_ratelimit_drops_total`, `codeshare_broadcast_send_failures_total`.
-- In `prod` these live on the internal management port, not the public listener.
+- **Exposure:** the base profile exposes only `health,info` on the public port (so a
+  directly-exposed instance never leaks metrics / route enumeration). The `dev` profile
+  adds `prometheus,metrics` on the main port; `prod` serves them on the separate internal
+  management port (`MANAGEMENT_PORT`, default 9091).
 
 ## Security model (what protects what)
 

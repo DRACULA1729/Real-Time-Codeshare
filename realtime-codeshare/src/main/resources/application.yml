@@ -1,8 +1,9 @@
 server:
   port: 8080
-  # Honor X-Forwarded-* from the TLS-terminating proxy/LB: affects secure-cookie
-  # decisions, redirect URIs, and the client IP used for per-IP rate limiting.
-  forward-headers-strategy: framework
+  # X-Forwarded-* is intentionally NOT trusted by default: a directly-exposed
+  # instance must not let a client spoof its IP (which would bypass the per-IP
+  # session-create rate limit) or its scheme. The prod profile turns it on via
+  # Tomcat's RemoteIpValve, trusting only configured proxy ranges.
   servlet:
     session:
       cookie:
@@ -39,21 +40,20 @@ github:
   redirect-uri: ${GITHUB_REDIRECT_URI:http://localhost:8080/api/github/callback}
   api-base: ${GITHUB_API_BASE:https://api.github.com}
 
-# Observability. Health (with liveness/readiness probes) + Prometheus metrics.
-# In prod these are moved to a separate, internal management port (see application-prod.yml).
+# Observability. By default only health + info are exposed on the main port, so a
+# directly-exposed instance never serves metrics/route-enumeration publicly. The
+# dev profile adds prometheus/metrics for local use; prod serves them on a separate
+# internal management port (see application-dev.yml / application-prod.yml).
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics
+        include: health,info
   endpoint:
     health:
       probes:
         enabled: true
       show-details: never
-  info:
-    env:
-      enabled: true
 
 logging:
   level:
