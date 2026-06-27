@@ -76,6 +76,16 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
     // sessionId -> last activity epoch millis (idle-reaper backstop)
     private final Map<String, Long> lastActivity = new ConcurrentHashMap<>();
 
+    // Closes slow/dead peers off the broadcast thread, so afterConnectionClosed
+    // (which mutates roomClients and may re-broadcast) never runs re-entrantly inside
+    // the broadcast loop that is iterating the same room.
+    private final java.util.concurrent.ExecutorService closeExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "ws-peer-close");
+                t.setDaemon(true);
+                return t;
+            });
+
     public OTWebSocketHandler(OTService otService,
                               SessionService sessionService,
                               MeterRegistry meters,
@@ -501,11 +511,11 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         } catch (SessionLimitExceededException e) {
             // The decorator's TERMINATE strategy flags the session and throws once the
             // send buffer/time limit is exceeded, but it does NOT close the socket — so
-            // close it here. That both stops the slow peer from lingering as a zombie in
-            // the room and routes through afterConnectionClosed for presence/admin cleanup.
+            // close it (off this thread) to evict the slow peer; afterConnectionClosed
+            // then does presence/admin cleanup without re-entering this broadcast loop.
             sendFailures.increment();
             log.warn("[{}] closing slow peer {}: {}", sessionId, session.getId(), e.getMessage());
-            closeQuietly(session, CloseStatus.SESSION_NOT_RELIABLE);
+            closeExecutor.execute(() -> closeQuietly(session, CloseStatus.SESSION_NOT_RELIABLE));
         } catch (IOException | RuntimeException e) {
             // IOException on a broken pipe, or IllegalStateException when the peer
             // socket is mid-close during a broadcast. Best-effort send: never let
