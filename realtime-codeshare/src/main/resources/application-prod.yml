@@ -1,6 +1,7 @@
 # Production profile. Activate with: --spring.profiles.active=prod
 # Assumes TLS is terminated at a reverse proxy / load balancer that forwards
-# X-Forwarded-* (forward-headers-strategy=framework is set in the base profile).
+# X-Forwarded-*; this profile enables RemoteIpValve (native strategy) to trust them
+# only from TRUSTED_PROXIES. The base profile trusts no forwarded headers.
 #
 # Required environment (the startup check in StartupConfig fails fast if missing):
 #   CODESHARE_ALLOWED_ORIGINS   exact prod origin(s), e.g. https://codeshare.example.com
