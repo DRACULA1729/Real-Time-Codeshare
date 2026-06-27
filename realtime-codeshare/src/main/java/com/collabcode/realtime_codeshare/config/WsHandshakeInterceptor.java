@@ -1,6 +1,5 @@
 package com.collabcode.realtime_codeshare.config;
 
-import com.collabcode.realtime_codeshare.model.Session;
 import com.collabcode.realtime_codeshare.service.SessionService;
 import com.collabcode.realtime_codeshare.ticket.Ticket;
 import com.collabcode.realtime_codeshare.ticket.TicketStore;
@@ -62,15 +61,11 @@ public class WsHandshakeInterceptor implements HandshakeInterceptor {
             return false;
         }
 
-        String token = ticket.token();
         attributes.put("sessionId", sessionId);
-        attributes.put("token", token);                  // from the ticket, never the URL
-        attributes.put("clientId", ticket.clientId());   // from the ticket
-        attributes.put("name", q.get("name"));           // non-secret
-        attributes.put("color", q.get("color"));         // non-secret
-
-        Session session = sessionService.get(sessionId);
-        attributes.put("roleIntent", (token != null && session != null && session.isAdmin(token)) ? "CREATOR" : "JOINER");
+        attributes.put("token", ticket.token());          // from the ticket, never the URL
+        attributes.put("clientId", ticket.clientId());    // from the ticket
+        attributes.put("name", q.get("name"));            // non-secret
+        attributes.put("color", q.get("color"));          // non-secret
         return true;
     }
 

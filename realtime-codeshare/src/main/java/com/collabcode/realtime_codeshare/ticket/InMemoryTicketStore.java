@@ -32,6 +32,11 @@ public class InMemoryTicketStore implements TicketStore {
     }
 
     @Override
+    public int ttlSeconds() {
+        return (int) (TTL_MS / 1000);
+    }
+
+    @Override
     public Ticket redeem(String ticketId) {
         if (ticketId == null || ticketId.isBlank()) return null;
         Entry e = tickets.remove(ticketId); // single-use: gone after the first redemption

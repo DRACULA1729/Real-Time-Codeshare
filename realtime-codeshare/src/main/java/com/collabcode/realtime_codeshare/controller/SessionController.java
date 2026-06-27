@@ -66,7 +66,7 @@ public class SessionController {
         String token = req == null ? null : req.token;
         String clientId = req == null ? null : req.clientId;
         String ticket = ticketStore.issue(id, token, clientId);
-        return ResponseEntity.ok(Map.of("ticket", ticket, "ttlSeconds", 30));
+        return ResponseEntity.ok(Map.of("ticket", ticket, "ttlSeconds", ticketStore.ttlSeconds()));
     }
 
     @GetMapping("/{id}/exists")

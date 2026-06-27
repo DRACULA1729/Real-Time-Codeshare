@@ -128,6 +128,56 @@ describe("transform — pure properties", () => {
   });
 });
 
+// Mirrors SessionConnection.handleResync(required=true): the server forced a
+// resync because the client's base fell below the compaction floor, so the client
+// captures its unacked edits, adopts the snapshot, then replays the edits (applied
+// locally + re-issued from the new base) instead of dropping them.
+describe("forced resync — replays unacked edits onto the snapshot and converges", () => {
+  it("preserves the lagging client's pending edits after a forced resync", () => {
+    const toServer: Op[] = [];
+    const server = new ServerSim("ABCDEFGH");
+    let clientDoc = "ABCDEFGH";
+    const ot = new OtClient(
+      (op) => toServer.push(op),
+      (op) => { clientDoc = applyToString(clientDoc, op); },
+    );
+
+    // Two quick local edits before any ack: one outstanding, one buffered.
+    const i1: Op = { type: "insert", clientId: "C", baseVersion: 0, pos: 0, text: "X" };
+    const i2: Op = { type: "insert", clientId: "C", baseVersion: 0, pos: 1, text: "Y" };
+    clientDoc = applyToString(clientDoc, i1); ot.submitLocal(i1);
+    clientDoc = applyToString(clientDoc, i2); ot.submitLocal(i2);
+    expect(ot.isQuiescent()).toBe(false);
+
+    // The server has independently advanced to a snapshot past the compaction floor
+    // and rejected the client's stale ops (they never committed).
+    server.doc = "ABCDEFGH123";
+    server.version = 11;
+    server.history = [];
+    toServer.length = 0;
+
+    // ---- forced-resync rebase (handleResync, required = true) ----
+    const pending = ot.capturePending();
+    expect(pending).toHaveLength(2); // outstanding + buffered, in order
+    clientDoc = server.doc;                                   // replaceText(snapshot)
+    ot.reset(server.version);                                 // reset to snapshot version
+    for (const op of pending) clientDoc = applyToString(clientDoc, op); // applyRemote (local)
+    for (const op of pending) ot.submitLocal(op);             // re-issue from the new base
+
+    // Drain: server commits the re-issued ops, client promotes its buffer on each ack.
+    let guard = 1000;
+    while (guard-- > 0) {
+      if (!toServer.length) break;
+      const c = server.commit(toServer.shift()!);
+      ot.onServerOp(c.op, c.version, "C");
+    }
+
+    expect(clientDoc).toBe(server.doc);
+    expect(clientDoc).toBe("XYABCDEFGH123"); // edits preserved on top of the snapshot
+    expect(ot.isQuiescent()).toBe(true);
+  });
+});
+
 describe("sha256Hex — matches Java MessageDigest(SHA-256)", () => {
   // FIPS 180-4 / Java-identical known-answer vectors. Pinning these keeps the
   // client digest byte-for-byte equal to the server's, so drift detection agrees.

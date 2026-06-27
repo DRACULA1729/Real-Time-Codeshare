@@ -29,4 +29,7 @@ public interface TicketStore {
      * redemption, an expired ticket, or an unknown id all return {@code null}.
      */
     Ticket redeem(String ticketId);
+
+    /** The ticket lifetime in seconds, so callers don't hardcode a duplicate value. */
+    int ttlSeconds();
 }
