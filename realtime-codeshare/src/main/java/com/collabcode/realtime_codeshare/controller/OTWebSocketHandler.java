@@ -9,6 +9,8 @@ import com.collabcode.realtime_codeshare.security.Role;
 import com.collabcode.realtime_codeshare.service.SessionService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -59,6 +61,11 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
     private final int opsPerSec;
     private final int cursorsPerSec;
 
+    // Metrics: committed ops, throttled inbound messages, failed broadcast sends.
+    private final Counter opsCommitted;
+    private final Counter rateLimitDrops;
+    private final Counter sendFailures;
+
     // sessionId -> (wsId -> decorated socket). Admitted clients only.
     private final Map<String, Map<String, WebSocketSession>> roomClients = new ConcurrentHashMap<>();
     // sessionId -> (wsId -> decorated socket). Clients awaiting approval.
@@ -70,12 +77,23 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
 
     public OTWebSocketHandler(OTService otService,
                               SessionService sessionService,
+                              MeterRegistry meters,
                               @Value("${codeshare.rate.ops-per-sec:50}") int opsPerSec,
                               @Value("${codeshare.rate.cursors-per-sec:30}") int cursorsPerSec) {
         this.otService = otService;
         this.sessionService = sessionService;
         this.opsPerSec = opsPerSec;
         this.cursorsPerSec = cursorsPerSec;
+        this.opsCommitted = meters.counter("codeshare.ops.committed");
+        this.rateLimitDrops = meters.counter("codeshare.ratelimit.drops");
+        this.sendFailures = meters.counter("codeshare.broadcast.send.failures");
+    }
+
+    /** Total admitted WebSocket connections across all rooms (for the connections gauge). */
+    public int connectionCount() {
+        int n = 0;
+        for (Map<String, WebSocketSession> room : roomClients.values()) n += room.size();
+        return n;
     }
 
     @Override
@@ -170,6 +188,7 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
     private void handleOp(WebSocketSession session, String sessionId, JsonNode node) {
         TokenBucket bucket = (TokenBucket) session.getAttributes().get(ATTR_BUCKET);
         if (bucket != null && !bucket.tryAcquire()) {
+            rateLimitDrops.increment();
             log.warn("[{}] rate limit exceeded for {}; dropping op", sessionId, session.getId());
             return;
         }
@@ -193,6 +212,7 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             sendResync(session, sessionId, true);
             return;
         }
+        opsCommitted.increment();
         // Broadcast to everyone including sender — the client advances its pending
         // queue on its own ack. Drift is caught by the idle SHA-256 resync probe,
         // so no per-op hash is broadcast.
@@ -224,7 +244,7 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         // Cursor floods amplify room-wide, so they get their own budget; drop silently
         // when exceeded (a dropped cursor frame is cosmetic, unlike a dropped edit).
         TokenBucket bucket = (TokenBucket) session.getAttributes().get(ATTR_CURSOR_BUCKET);
-        if (bucket != null && !bucket.tryAcquire()) return;
+        if (bucket != null && !bucket.tryAcquire()) { rateLimitDrops.increment(); return; }
 
         String clientId = attr(session, ATTR_CLIENT_ID);
         if (clientId == null || !node.has("pos")) return;
@@ -476,6 +496,7 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             // IOException on a broken pipe, or IllegalStateException when the peer
             // socket is mid-close during a broadcast. Best-effort send: never let
             // one dead socket disrupt the room.
+            sendFailures.increment();
             log.warn("[{}] send to {} failed: {}", sessionId, session.getId(), e.getMessage());
         }
     }

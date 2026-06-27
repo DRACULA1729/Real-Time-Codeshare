@@ -15,7 +15,18 @@ server:
 
 codeshare:
   # No localhost fallback in prod — must be set explicitly to the real origin(s).
-  allowed-origins: ${CODESHARE_ALLOWED_ORIGINS}
+  # Empty default so the startup check (ProdEnvCheck) reports a clear message.
+  allowed-origins: ${CODESHARE_ALLOWED_ORIGINS:}
+
+# Bind actuator to a separate internal port so health/metrics aren't exposed on the
+# public listener. Point your orchestrator's probes and Prometheus scraper at it.
+management:
+  server:
+    port: ${MANAGEMENT_PORT:9091}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
 
 logging:
   level:

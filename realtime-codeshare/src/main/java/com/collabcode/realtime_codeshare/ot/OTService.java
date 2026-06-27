@@ -54,6 +54,11 @@ public class OTService {
         return sessions.containsKey(sessionId);
     }
 
+    /** Number of resident document stores (for the live-rooms metric). */
+    public int roomCount() {
+        return sessions.size();
+    }
+
     /** Persist the current snapshot of a resident room (on-empty / periodic save). */
     public void persist(String sessionId) {
         DocumentStore store = sessions.get(sessionId);

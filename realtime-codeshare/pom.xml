@@ -28,6 +28,9 @@
 	</scm>
 	<properties>
 		<java.version>21</java.version>
+		<!-- Set -Dfrontend.skip=true to skip the Node download + Vite build and reuse
+		     prebuilt assets already in src/main/resources/static (air-gapped / CI). -->
+		<frontend.skip>false</frontend.skip>
 	</properties>
 	<dependencies>
 <!--	No app-wide login => Spring Security stays off. Auth is custom over the WebSocket
@@ -43,6 +46,15 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-web</artifactId>
+		</dependency>
+		<!-- Observability: health/readiness probes + Micrometer metrics. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-prometheus</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -83,6 +95,7 @@
 				<configuration>
 					<workingDirectory>frontend</workingDirectory>
 					<installDirectory>target</installDirectory>
+					<skip>${frontend.skip}</skip>
 				</configuration>
 				<executions>
 					<execution>

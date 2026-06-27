@@ -29,6 +29,10 @@ public class SessionService {
     /** Single source of truth for valid id shape, reused by handler + REST + interceptor. */
     private static final Pattern ID_FORMAT = Pattern.compile("^[A-Za-z0-9_-]{16,64}$");
 
+    /** A CSS hex color (#rgb .. #rrggbbaa). Anything else falls back to the default. */
+    private static final Pattern COLOR_FORMAT = Pattern.compile("^#[0-9a-fA-F]{3,8}$");
+    private static final String DEFAULT_COLOR = "#7aa2f7";
+
     private final SecureRandom random = new SecureRandom();
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
     private final int maxRejected;
@@ -251,6 +255,7 @@ public class SessionService {
     }
 
     private static String safeColor(String color) {
-        return (color == null || color.isBlank()) ? "#7aa2f7" : color;
+        // Defense-in-depth: only accept a hex color, never store/relay arbitrary text.
+        return (color != null && COLOR_FORMAT.matcher(color).matches()) ? color : DEFAULT_COLOR;
     }
 }

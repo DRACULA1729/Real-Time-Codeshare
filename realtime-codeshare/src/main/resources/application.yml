@@ -39,6 +39,22 @@ github:
   redirect-uri: ${GITHUB_REDIRECT_URI:http://localhost:8080/api/github/callback}
   api-base: ${GITHUB_API_BASE:https://api.github.com}
 
+# Observability. Health (with liveness/readiness probes) + Prometheus metrics.
+# In prod these are moved to a separate, internal management port (see application-prod.yml).
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  info:
+    env:
+      enabled: true
+
 logging:
   level:
     root: INFO
