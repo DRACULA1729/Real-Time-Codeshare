@@ -9,6 +9,8 @@ spring:
       - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
       - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
       - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
+      # We use StringRedisTemplate directly, not Spring Data Redis repositories.
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
   data:
     redis:
       url: ${REDIS_URL:redis://localhost:6379}

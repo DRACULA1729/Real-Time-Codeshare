@@ -4,9 +4,12 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.UpdateTimestamp;
 
-/** Durable document snapshot row, keyed by session id. {@code updated_at} is managed
- *  by the DB default (not mapped here). */
+import java.time.Instant;
+
+/** Durable document snapshot row, keyed by session id. {@code updated_at} is set by
+ *  Hibernate on every insert and update, so it reflects the last write. */
 @Entity
 @Table(name = "document_snapshot")
 public class DocumentSnapshotEntity {
@@ -21,6 +24,10 @@ public class DocumentSnapshotEntity {
     @Column(name = "version", nullable = false)
     private int version;
 
+    @UpdateTimestamp
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
+
     protected DocumentSnapshotEntity() {} // for JPA
 
     public DocumentSnapshotEntity(String sessionId, String text, int version) {
@@ -32,4 +39,5 @@ public class DocumentSnapshotEntity {
     public String getSessionId() { return sessionId; }
     public String getText() { return text; }
     public int getVersion() { return version; }
+    public Instant getUpdatedAt() { return updatedAt; }
 }

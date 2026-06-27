@@ -35,7 +35,10 @@ against the managed services by swapping the connection string:
 - **`DocumentRepository` has three implementations** behind profiles: in-memory
   (default), `postgres` (durable), `redis` (shared). The default build needs neither
   engine — the JPA/DataSource/Flyway/Redis auto-configs are excluded in
-  `application.yml` and re-enabled per profile.
+  `application.yml` and re-enabled per profile. **Activate exactly one of `postgres`
+  / `redis`** — they are mutually exclusive in this build (the app fails fast with a
+  clear message if both are set; the composite Redis-over-Postgres design is item 5
+  below).
 - **P2-2 head-of-line blocking:** the per-session `ConcurrentWebSocketSessionDecorator`
   now uses `OverflowStrategy.TERMINATE`, so a peer that can't drain its send buffer is
   closed rather than stalling the room's fan-out.

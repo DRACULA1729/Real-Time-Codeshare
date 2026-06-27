@@ -19,6 +19,7 @@ import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
+import org.springframework.web.socket.handler.SessionLimitExceededException;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
@@ -497,6 +498,14 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
     private void trySend(WebSocketSession session, TextMessage msg, String sessionId) {
         try {
             session.sendMessage(msg);
+        } catch (SessionLimitExceededException e) {
+            // The decorator's TERMINATE strategy flags the session and throws once the
+            // send buffer/time limit is exceeded, but it does NOT close the socket — so
+            // close it here. That both stops the slow peer from lingering as a zombie in
+            // the room and routes through afterConnectionClosed for presence/admin cleanup.
+            sendFailures.increment();
+            log.warn("[{}] closing slow peer {}: {}", sessionId, session.getId(), e.getMessage());
+            closeQuietly(session, CloseStatus.SESSION_NOT_RELIABLE);
         } catch (IOException | RuntimeException e) {
             // IOException on a broken pipe, or IllegalStateException when the peer
             // socket is mid-close during a broadcast. Best-effort send: never let
