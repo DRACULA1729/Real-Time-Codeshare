@@ -28,16 +28,19 @@ class DocumentPersistenceTest {
         OTService ot = new OTService(repo);
 
         ot.applyOp("S", insert(0, "hello"));
+        ot.setName("S", "notes");
         assertThat(ot.getDocument("S")).isEqualTo("hello");
 
         ot.persist("S");
         assertThat(repo.load("S")).get().extracting(StoredDocument::text).isEqualTo("hello");
+        assertThat(repo.load("S")).get().extracting(StoredDocument::name).isEqualTo("notes");
 
         // Simulate the room going cold in memory but staying in the repository,
         // then a reconnect reloading it (load-on-miss) instead of a blank doc.
         OTService reborn = new OTService(repo);
         assertThat(reborn.getDocument("S")).isEqualTo("hello");
         assertThat(reborn.getVersion("S")).isEqualTo(1);
+        assertThat(reborn.getName("S")).isEqualTo("notes");
     }
 
     @Test
@@ -46,6 +49,7 @@ class DocumentPersistenceTest {
         OTService ot = new OTService(repo);
 
         ot.applyOp("S", insert(0, "data"));
+        ot.setName("S", "scratch");
         ot.persist("S");
         assertThat(repo.load("S")).isPresent();
 
@@ -53,6 +57,7 @@ class DocumentPersistenceTest {
         assertThat(repo.load("S")).isEmpty();
         // A fresh getOrCreate now starts blank — the room is truly gone.
         assertThat(ot.getDocument("S")).isEmpty();
+        assertThat(ot.getName("S")).isEmpty();
     }
 
     @Test

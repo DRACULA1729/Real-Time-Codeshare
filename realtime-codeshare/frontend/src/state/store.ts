@@ -35,7 +35,7 @@ interface SessionState {
   setReconnecting: (v: boolean) => void;
   setCursorPos: (line: number, col: number) => void;
   setIdentity: (p: { sessionId: string; clientId: string; name: string; color: string; token: string | null }) => void;
-  applyInit: (p: { document: string; version: number; role: Role; token: string }) => void;
+  applyInit: (p: { document: string; version: number; role: Role; token: string; fileName: string }) => void;
   setRole: (role: Role) => void;
   setVersion: (version: number) => void;
   setPresence: (users: PresenceUser[]) => void;
@@ -78,8 +78,10 @@ export const useSessionStore = create<SessionState>((set) => ({
   setCursorPos: (cursorLine, cursorCol) => set({ cursorLine, cursorCol }),
   setIdentity: ({ sessionId, clientId, name, color, token }) =>
     set({ sessionId, clientId, name, color, token }),
-  applyInit: ({ document, version, role, token }) =>
-    set({ initialDocument: document, version, role, token, phase: "workspace", connection: "online", reconnecting: false }),
+  applyInit: ({ document, version, role, token, fileName }) =>
+    // fileName rides along atomically: a reconnect adopts the authoritative name,
+    // covering renames broadcast while this client was disconnected.
+    set({ initialDocument: document, version, role, token, fileName, phase: "workspace", connection: "online", reconnecting: false }),
   setRole: (role) => set({ role }),
   setVersion: (version) => set({ version }),
   setPresence: (users) => set({ users }),

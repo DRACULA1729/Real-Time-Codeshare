@@ -17,6 +17,7 @@ export interface InitMsg {
   token: string;
   role: Role;
   clientId?: string;
+  fileName?: string; // shared base name; optional to tolerate an older server
 }
 export interface OpMsg {
   type: "op";
@@ -71,6 +72,10 @@ export interface KickedMsg {
 export interface SessionEndedMsg {
   type: "sessionEnded";
 }
+export interface RenameMsg {
+  type: "rename";
+  fileName: string; // server-sanitized base name, echoed to the sender too
+}
 
 export type WsInbound =
   | InitMsg
@@ -85,7 +90,8 @@ export type WsInbound =
   | JoinDeniedMsg
   | AdminChangedMsg
   | KickedMsg
-  | SessionEndedMsg;
+  | SessionEndedMsg
+  | RenameMsg;
 
 // The server serializes Op via Jackson: `type` is the enum name ("INSERT" /
 // "DELETE"). Normalize to our lowercase wire model before transforming.
@@ -126,4 +132,5 @@ export type WsOutbound =
   | { type: "approve"; joinKey: string }
   | { type: "reject"; joinKey: string }
   | { type: "kick"; clientId: string }
-  | { type: "endsession" };
+  | { type: "endsession" }
+  | { type: "rename"; fileName: string };

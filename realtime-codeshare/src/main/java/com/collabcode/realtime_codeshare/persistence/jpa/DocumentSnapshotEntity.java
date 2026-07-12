@@ -24,20 +24,26 @@ public class DocumentSnapshotEntity {
     @Column(name = "version", nullable = false)
     private int version;
 
+    // nullable: rows written before V2 have no name; NULL reads back as "" upstream
+    @Column(name = "file_name", length = 64)
+    private String fileName;
+
     @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
     protected DocumentSnapshotEntity() {} // for JPA
 
-    public DocumentSnapshotEntity(String sessionId, String text, int version) {
+    public DocumentSnapshotEntity(String sessionId, String text, int version, String fileName) {
         this.sessionId = sessionId;
         this.text = text == null ? "" : text;
         this.version = version;
+        this.fileName = fileName;
     }
 
     public String getSessionId() { return sessionId; }
     public String getText() { return text; }
     public int getVersion() { return version; }
+    public String getFileName() { return fileName; }
     public Instant getUpdatedAt() { return updatedAt; }
 }
