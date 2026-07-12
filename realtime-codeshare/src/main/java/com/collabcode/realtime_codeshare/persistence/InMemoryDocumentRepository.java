@@ -20,8 +20,8 @@ public class InMemoryDocumentRepository implements DocumentRepository {
     private final Map<String, StoredDocument> docs = new ConcurrentHashMap<>();
 
     @Override
-    public void save(String sessionId, String text, int version) {
-        docs.put(sessionId, new StoredDocument(text, version));
+    public void save(String sessionId, String text, int version, String name) {
+        docs.put(sessionId, new StoredDocument(text, version, name));
     }
 
     @Override

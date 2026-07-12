@@ -50,8 +50,9 @@ export function ActionsPopover({ onClose }: { onClose: () => void }) {
   const rawName = () => (base().includes(".") ? base() : `${base()}.${ext}`);
 
   function downloadRaw() {
+    // The export filename is a transient local override — the shared room name is
+    // renamed from the sidebar and must not be forked by a download.
     downloadBlob(new Blob([session.getDocument()], { type: "text/plain" }), rawName());
-    useSessionStore.getState().setFileName(base());
   }
 
   async function downloadZip() {

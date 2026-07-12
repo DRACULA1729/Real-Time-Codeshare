@@ -163,7 +163,8 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
                 "version", otService.getVersion(sessionId),
                 "token", token,
                 "role", roleOf(sessionId, token),
-                "clientId", nullSafe(attr(session, ATTR_CLIENT_ID))
+                "clientId", nullSafe(attr(session, ATTR_CLIENT_ID)),
+                "fileName", otService.getName(sessionId)
         ));
         broadcastPresence(sessionId);
         if (sessionService.isAdmin(sessionId, token)) sendPendingListTo(session, sessionId);
@@ -191,6 +192,7 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             case "insert", "delete" -> { if (requireAdmitted(session, sessionId)) handleOp(session, sessionId, node); }
             case "cursor" -> { if (requireAdmitted(session, sessionId)) handleCursor(session, sessionId, node); }
             case "resync" -> { if (requireAdmitted(session, sessionId)) handleResync(session, sessionId); }
+            case "rename" -> { if (requireAdmitted(session, sessionId)) handleRename(session, sessionId, node); }
             case "approve" -> { if (requireAdmin(sessionId, token)) handleApprove(sessionId, token, node); }
             case "reject" -> { if (requireAdmin(sessionId, token)) handleReject(sessionId, token, node); }
             case "kick" -> { if (requireAdmin(sessionId, token)) handleKick(sessionId, token, node); }
@@ -268,6 +270,27 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         cursorPositions.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>()).put(clientId, pos);
         // Reserialize to a known {type,clientId,pos} shape — never relay raw client JSON.
         broadcast(sessionId, json(Map.of("type", "cursor", "clientId", clientId, "pos", pos)), session.getId());
+    }
+
+    /** Any admitted participant may rename the room's single document. Charged against
+     *  the ops budget (renames are rare; a flood shouldn't get its own free lane). */
+    private void handleRename(WebSocketSession session, String sessionId, JsonNode node) {
+        TokenBucket bucket = (TokenBucket) session.getAttributes().get(ATTR_BUCKET);
+        if (bucket != null && !bucket.tryAcquire()) {
+            rateLimitDrops.increment();
+            log.warn("[{}] rate limit exceeded for {}; dropping rename", sessionId, session.getId());
+            return;
+        }
+        JsonNode raw = node.get("fileName");
+        if (raw == null || !raw.isTextual()) {
+            log.warn("[{}] dropping rename with missing/non-string fileName", sessionId);
+            return;
+        }
+        String clean = OTService.sanitizeBaseName(raw.asText());
+        otService.setName(sessionId, clean);
+        // Echo to the sender too — the server-sanitized value is authoritative, and
+        // concurrent renames converge last-write-wins in broadcast order.
+        broadcast(sessionId, json(Map.of("type", "rename", "fileName", clean)), null);
     }
 
     // ---------------- admin actions ----------------

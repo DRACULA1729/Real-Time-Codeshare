@@ -56,7 +56,11 @@ class WsHandlerIntegrationTest {
     }
 
     private JsonNode waitFor(Collector c, String type) throws Exception {
-        long end = System.currentTimeMillis() + 5000;
+        return waitFor(c, type, 5000);
+    }
+
+    private JsonNode waitFor(Collector c, String type, long timeoutMs) throws Exception {
+        long end = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < end) {
             String msg = c.q.poll(200, TimeUnit.MILLISECONDS);
             if (msg == null) continue;
@@ -100,6 +104,88 @@ class WsHandlerIntegrationTest {
 
         host.close(CloseStatus.NORMAL);
         guest.close(CloseStatus.NORMAL);
+    }
+
+    @Test
+    void renameIsBroadcastAndDeliveredOnInit() throws Exception {
+        Session session = sessionService.createSession("Host", "#7aa2f7");
+        String sid = session.getSessionId();
+        String adminToken = session.getCreatorToken();
+
+        Collector hostC = new Collector();
+        WebSocketSession host = connect(sid, "host", "Host", ticketStore.issue(sid, adminToken, "host"), hostC);
+        JsonNode init = waitFor(hostC, "init");
+        assertThat(init).isNotNull();
+        assertThat(init.path("fileName").asText()).as("fresh room starts unnamed").isEmpty();
+
+        Collector guestC = new Collector();
+        WebSocketSession guest = connect(sid, "guest", "Guest", ticketStore.issue(sid, null, "guest"), guestC);
+        assertThat(waitFor(guestC, "waitingForApproval")).isNotNull();
+        JsonNode jr = waitFor(hostC, "joinRequest");
+        host.sendMessage(new TextMessage("{\"type\":\"approve\",\"joinKey\":\"" + jr.path("joinKey").asText() + "\"}"));
+        assertThat(waitFor(guestC, "init")).isNotNull();
+
+        host.sendMessage(new TextMessage("{\"type\":\"rename\",\"fileName\":\"MyClass\"}"));
+        JsonNode guestRename = waitFor(guestC, "rename");
+        assertThat(guestRename).as("guest receives rename").isNotNull();
+        assertThat(guestRename.path("fileName").asText()).isEqualTo("MyClass");
+        assertThat(waitFor(hostC, "rename")).as("sender receives the echo too").isNotNull();
+
+        // A late joiner (token holder, auto-admitted) gets the name on init.
+        Collector lateC = new Collector();
+        WebSocketSession late = connect(sid, "late", "Late", ticketStore.issue(sid, adminToken, "late"), lateC);
+        JsonNode lateInit = waitFor(lateC, "init");
+        assertThat(lateInit).isNotNull();
+        assertThat(lateInit.path("fileName").asText()).isEqualTo("MyClass");
+
+        host.close(CloseStatus.NORMAL);
+        guest.close(CloseStatus.NORMAL);
+        late.close(CloseStatus.NORMAL);
+    }
+
+    @Test
+    void renameFromNonAdmittedClientIsDropped() throws Exception {
+        Session session = sessionService.createSession("Host", "#7aa2f7");
+        String sid = session.getSessionId();
+
+        Collector hostC = new Collector();
+        WebSocketSession host = connect(sid, "host", "Host",
+                ticketStore.issue(sid, session.getCreatorToken(), "host"), hostC);
+        assertThat(waitFor(hostC, "init")).isNotNull();
+
+        // Guest sits in the waiting room (never approved) and tries to rename.
+        Collector guestC = new Collector();
+        WebSocketSession guest = connect(sid, "guest", "Guest", ticketStore.issue(sid, null, "guest"), guestC);
+        assertThat(waitFor(guestC, "waitingForApproval")).isNotNull();
+        guest.sendMessage(new TextMessage("{\"type\":\"rename\",\"fileName\":\"hijack\"}"));
+
+        assertThat(waitFor(hostC, "rename", 1500)).as("no broadcast from a waiting-room client").isNull();
+
+        host.close(CloseStatus.NORMAL);
+        guest.close(CloseStatus.NORMAL);
+    }
+
+    @Test
+    void renameSanitizesAndRejectsMalformedPayloads() throws Exception {
+        Session session = sessionService.createSession("Host", "#7aa2f7");
+        String sid = session.getSessionId();
+
+        Collector hostC = new Collector();
+        WebSocketSession host = connect(sid, "host", "Host",
+                ticketStore.issue(sid, session.getCreatorToken(), "host"), hostC);
+        assertThat(waitFor(hostC, "init")).isNotNull();
+
+        // Dot-cut + trim: everything from the first dot goes, then whitespace.
+        host.sendMessage(new TextMessage("{\"type\":\"rename\",\"fileName\":\"  my.file.java  \"}"));
+        JsonNode echoed = waitFor(hostC, "rename");
+        assertThat(echoed).isNotNull();
+        assertThat(echoed.path("fileName").asText()).isEqualTo("my");
+
+        // Non-string fileName is dropped without a broadcast.
+        host.sendMessage(new TextMessage("{\"type\":\"rename\",\"fileName\":5}"));
+        assertThat(waitFor(hostC, "rename", 1500)).as("non-string fileName dropped").isNull();
+
+        host.close(CloseStatus.NORMAL);
     }
 
     @Test

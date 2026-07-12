@@ -20,7 +20,8 @@ export interface DocHost {
 }
 
 export interface SessionHandlers {
-  onInit(p: { document: string; version: number; role: Role; token: string }): void;
+  onInit(p: { document: string; version: number; role: Role; token: string; fileName: string }): void;
+  onRename(fileName: string): void;
   onResyncDoc(document: string, version: number): void;
   onPresence(users: PresenceUser[]): void;
   onCursor(clientId: string, pos: number): void;
@@ -130,6 +131,12 @@ export class SessionConnection {
     this.sendRaw({ type: "cursor", clientId: this.clientId, pos, sessionId: this.sessionId });
   }
 
+  /** Rename the shared document (base name only; already sanitized by the caller). */
+  rename(baseName: string): void {
+    if (!this.admitted) return;
+    this.sendRaw({ type: "rename", fileName: baseName });
+  }
+
   // ---- admin actions ----
   approve(joinKey: string): void {
     this.sendRaw({ type: "approve", joinKey });
@@ -168,7 +175,13 @@ export class SessionConnection {
         this.token = msg.token || this.token;
         this.role = msg.role || "JOINER";
         this.ot.reset(msg.version || 0);
-        this.h.onInit({ document: msg.document || "", version: msg.version || 0, role: this.role, token: this.token! });
+        this.h.onInit({
+          document: msg.document || "",
+          version: msg.version || 0,
+          role: this.role,
+          token: this.token!,
+          fileName: msg.fileName ?? "",
+        });
         break;
       case "op":
         this.ot.onServerOp(normalizeOp(msg.op), msg.version, this.clientId);
@@ -182,6 +195,9 @@ export class SessionConnection {
         break;
       case "cursorRemove":
         this.h.onCursorRemove(msg.clientId);
+        break;
+      case "rename":
+        this.h.onRename(msg.fileName ?? "");
         break;
       case "presence":
         for (const u of msg.users) if (u.clientId === this.clientId) this.role = u.role;

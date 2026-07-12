@@ -33,6 +33,9 @@ public class OTService {
     /** Max characters an insert may carry / max span a delete may cover. */
     static final int MAX_OP_LEN = 65_536;
 
+    /** Max length of the shared base file name (matches the file_name VARCHAR(64) column). */
+    public static final int MAX_BASENAME_LEN = 64;
+
     private final Map<String, DocumentStore> sessions = new ConcurrentHashMap<>();
     private final DocumentRepository repository;
 
@@ -45,7 +48,7 @@ public class OTService {
             DocumentStore store = new DocumentStore();
             // Load-on-miss: a reconnect after the room emptied (or a restart with a
             // durable repository) rehydrates the real document instead of a blank one.
-            repository.load(k).ifPresent(snap -> store.seed(snap.text(), snap.version()));
+            repository.load(k).ifPresent(snap -> store.seed(snap.text(), snap.version(), snap.name()));
             return store;
         });
     }
@@ -64,14 +67,14 @@ public class OTService {
         DocumentStore store = sessions.get(sessionId);
         if (store == null) return;
         Snapshot snap = store.snapshot();
-        repository.save(sessionId, snap.document(), snap.version());
+        repository.save(sessionId, snap.document(), snap.version(), store.getName());
     }
 
     /** Snapshot every resident room — periodic backstop so a crash loses at most one interval. */
     public void persistAll() {
         sessions.forEach((id, store) -> {
             Snapshot snap = store.snapshot();
-            repository.save(id, snap.document(), snap.version());
+            repository.save(id, snap.document(), snap.version(), store.getName());
         });
     }
 
@@ -106,7 +109,33 @@ public class OTService {
         return getOrCreateStore(sessionId).getVersion();
     }
 
+    /** Shared base file name of the room's document ("" when never renamed). */
+    public String getName(String sessionId) {
+        return getOrCreateStore(sessionId).getName();
+    }
+
+    public void setName(String sessionId, String name) {
+        getOrCreateStore(sessionId).setName(name);
+    }
+
     // ---------------- validation ----------------
+
+    /**
+     * Normalize a user-supplied base file name: cut at the first dot (the extension
+     * is derived from language detection, never user-set), strip control chars and
+     * path separators, trim, cap at {@value #MAX_BASENAME_LEN} chars. May return ""
+     * (displayed as the "untitled" fallback). Must match the client-side
+     * sanitizeBaseName in frontend/src/lib/fileName.ts.
+     */
+    public static String sanitizeBaseName(String raw) {
+        if (raw == null) return "";
+        String s = raw;
+        int dot = s.indexOf('.');
+        if (dot >= 0) s = s.substring(0, dot);
+        s = s.replaceAll("[\\u0000-\\u001F\\u007F/\\\\]", "").trim();
+        if (s.length() > MAX_BASENAME_LEN) s = s.substring(0, MAX_BASENAME_LEN);
+        return s;
+    }
 
     private Op validateAndBuild(OpDTO dto) {
         if (dto == null) throw new InvalidOpException("op is null");
@@ -315,6 +344,8 @@ public class OTService {
         /** Highest version whose op has been compacted away; an op based at or below
          *  this can no longer be transformed correctly and must force a re-sync. */
         private int compactedThroughVersion = 0;
+        /** Shared base file name; display metadata, last-write-wins across clients. */
+        private String name = "";
 
         public synchronized int getVersion() { return version.get(); }
 
@@ -322,14 +353,19 @@ public class OTService {
 
         public synchronized int historySize() { return history.size(); }
 
+        public synchronized String getName() { return name; }
+
+        public synchronized void setName(String name) { this.name = name == null ? "" : name; }
+
         /** Rehydrate a fresh store from a persisted snapshot. History starts empty,
          *  so any op based before this version is treated as below the floor. */
-        public synchronized void seed(String text, int atVersion) {
+        public synchronized void seed(String text, int atVersion, String name) {
             doc.setLength(0);
             doc.append(text == null ? "" : text);
             version.set(atVersion);
             history.clear();
             compactedThroughVersion = atVersion;
+            this.name = name == null ? "" : name;
         }
 
         /**

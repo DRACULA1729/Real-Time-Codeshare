@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode }
 import { createSession } from "../api/client";
 import { SessionConnection, type DocHost, type SessionHandlers } from "../net/SessionConnection";
 import { newClientId, storeProfile, storedColor, storedName, storedToken } from "../lib/profile";
+import { sanitizeBaseName } from "../lib/fileName";
 import { useSessionStore } from "../state/store";
 import { RemoteCursorBus } from "./RemoteCursorBus";
 import { DEFAULT_COLOR } from "../components/gate/palette";
@@ -19,6 +20,7 @@ export interface SessionController {
   localInsert: (pos: number, text: string) => void;
   localDelete: (pos: number, length: number) => void;
   sendCursor: (pos: number) => void;
+  rename: (baseName: string) => void;
   setDocHost: (host: DocHost | null) => void;
   getDocument: () => string;
   inviteLink: () => string;
@@ -40,11 +42,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // Stable handler set that pushes connection events into the store / cursor bus.
   const handlers = useMemo<SessionHandlers>(
     () => ({
-      onInit: ({ document, version, role, token }) => {
+      onInit: ({ document, version, role, token, fileName }) => {
         const s = store.getState();
         if (s.sessionId) storeProfile(s.sessionId, token, s.name, s.color);
-        s.applyInit({ document, version, role, token });
+        s.applyInit({ document, version, role, token, fileName });
       },
+      onRename: (fileName) => store.getState().setFileName(fileName),
       onResyncDoc: (_document, version) => store.getState().setVersion(version),
       onPresence: (users) => store.getState().setPresence(users),
       onCursor: (clientId, pos) => cursors.push(clientId, pos),
@@ -147,6 +150,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       localInsert: (pos, text) => connRef.current?.localInsert(pos, text),
       localDelete: (pos, length) => connRef.current?.localDelete(pos, length),
       sendCursor: (pos) => connRef.current?.sendCursor(pos),
+      rename: (baseName) => {
+        const clean = sanitizeBaseName(baseName);
+        // Optimistic: the server echo re-applies the authoritative (identically
+        // sanitized) value; concurrent renames converge last-write-wins.
+        store.getState().setFileName(clean);
+        connRef.current?.rename(clean);
+      },
       setDocHost: (host) => connRef.current?.setDocHost(host),
       getDocument: () => connRef.current?.getDocumentText() ?? "",
       inviteLink: () => {

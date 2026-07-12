@@ -28,15 +28,15 @@ public class JpaDocumentRepository implements DocumentRepository {
 
     @Override
     @Transactional
-    public void save(String sessionId, String text, int version) {
-        repo.save(new DocumentSnapshotEntity(sessionId, text, version));
+    public void save(String sessionId, String text, int version, String name) {
+        repo.save(new DocumentSnapshotEntity(sessionId, text, version, name));
     }
 
     @Override
     @Transactional(readOnly = true)
     public Optional<StoredDocument> load(String sessionId) {
         return repo.findById(sessionId)
-                .map(e -> new StoredDocument(e.getText(), e.getVersion()));
+                .map(e -> new StoredDocument(e.getText(), e.getVersion(), e.getFileName()));
     }
 
     @Override
