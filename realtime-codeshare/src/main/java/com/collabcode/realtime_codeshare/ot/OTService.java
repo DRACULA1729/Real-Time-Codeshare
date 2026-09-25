@@ -48,7 +48,7 @@ public class OTService {
             DocumentStore store = new DocumentStore();
             // Load-on-miss: a reconnect after the room emptied (or a restart with a
             // durable repository) rehydrates the real document instead of a blank one.
-            repository.load(k).ifPresent(snap -> store.seed(snap.text(), snap.version(), snap.name()));
+            repository.load(k).ifPresent(snap -> store.seed(snap.text(), snap.version(), snap.name(), snap.language()));
             return store;
         });
     }
@@ -67,7 +67,7 @@ public class OTService {
         DocumentStore store = sessions.get(sessionId);
         if (store == null) return;
         Snapshot snap = store.snapshot();
-        repository.save(sessionId, snap.document(), snap.version(), store.getName());
+        repository.save(sessionId, snap.document(), snap.version(), store.getName(), store.getLanguage());
     }
 
     /** Save only rooms changed since their last save — the short-interval write-through
@@ -77,7 +77,7 @@ public class OTService {
             Snapshot snap = store.takeDirtySnapshot();
             if (snap == null) return;
             try {
-                repository.save(id, snap.document(), snap.version(), store.getName());
+                repository.save(id, snap.document(), snap.version(), store.getName(), store.getLanguage());
             } catch (RuntimeException e) {
                 store.markDirty();                 // retry on the next sweep
                 log.warn("Dirty persist failed for session {}: {}", id, e.toString());
@@ -89,7 +89,7 @@ public class OTService {
     public void persistAll() {
         sessions.forEach((id, store) -> {
             Snapshot snap = store.snapshot();
-            repository.save(id, snap.document(), snap.version(), store.getName());
+            repository.save(id, snap.document(), snap.version(), store.getName(), store.getLanguage());
         });
     }
 
@@ -114,7 +114,7 @@ public class OTService {
         DocumentStore store = sessions.remove(sessionId);
         if (store == null) return;
         Snapshot snap = store.snapshot();
-        repository.save(sessionId, snap.document(), snap.version(), store.getName());
+        repository.save(sessionId, snap.document(), snap.version(), store.getName(), store.getLanguage());
     }
 
     /** Drop a room's entire OT state, including its persisted snapshot. Called only
@@ -141,6 +141,30 @@ public class OTService {
 
     public void setName(String sessionId, String name) {
         getOrCreateStore(sessionId).setName(name);
+    }
+
+    /** Language id chosen for the room's document ("" = each client auto-detects). */
+    public String getLanguage(String sessionId) {
+        return getOrCreateStore(sessionId).getLanguage();
+    }
+
+    public void setLanguage(String sessionId, String language) {
+        getOrCreateStore(sessionId).setLanguage(language);
+    }
+
+    /** Max length of a language id (matches the language VARCHAR(32) column). */
+    public static final int MAX_LANGUAGE_LEN = 32;
+
+    /**
+     * Normalize a client-chosen language id. The server doesn't know the client's
+     * language table, so it only enforces a safe shape: lowercase letters, digits and
+     * {@code + # -}, capped at {@value #MAX_LANGUAGE_LEN}. Anything else becomes ""
+     * (auto-detect).
+     */
+    public static String sanitizeLanguage(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim().toLowerCase(Locale.ROOT);
+        return s.length() <= MAX_LANGUAGE_LEN && s.matches("[a-z0-9+#-]*") ? s : "";
     }
 
     // ---------------- validation ----------------
@@ -373,6 +397,8 @@ public class OTService {
         private String name = "";
         /** Changed since the last {@link #takeDirtySnapshot()}. */
         private boolean dirty = false;
+        /** Chosen language id ("" = auto-detect); last-write-wins like the name. */
+        private String language = "";
 
         public synchronized int getVersion() { return version.get(); }
 
@@ -393,15 +419,20 @@ public class OTService {
             return snapshot();
         }
 
+        public synchronized String getLanguage() { return language; }
+
+        public synchronized void setLanguage(String language) { this.language = language == null ? "" : language; dirty = true; }
+
         /** Rehydrate a fresh store from a persisted snapshot. History starts empty,
          *  so any op based before this version is treated as below the floor. */
-        public synchronized void seed(String text, int atVersion, String name) {
+        public synchronized void seed(String text, int atVersion, String name, String language) {
             doc.setLength(0);
             doc.append(text == null ? "" : text);
             version.set(atVersion);
             history.clear();
             compactedThroughVersion = atVersion;
             this.name = name == null ? "" : name;
+            this.language = language == null ? "" : language;
         }
 
         /**

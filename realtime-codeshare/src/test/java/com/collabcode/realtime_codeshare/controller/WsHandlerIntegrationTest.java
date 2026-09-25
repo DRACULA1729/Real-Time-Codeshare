@@ -151,6 +151,35 @@ class WsHandlerIntegrationTest {
     }
 
     @Test
+    void languageChoiceIsSanitizedBroadcastAndDeliveredOnInit() throws Exception {
+        Session session = sessionService.createSession("Host", "#7aa2f7");
+        String sid = session.getSessionId();
+        String adminToken = session.getCreatorToken();
+
+        Collector hostC = new Collector();
+        WebSocketSession host = connect(sid, "host", "Host", ticketStore.issue(sid, adminToken, "host"), hostC);
+        JsonNode init = waitFor(hostC, "init");
+        assertThat(init.path("language").asText()).as("fresh room auto-detects").isEmpty();
+
+        host.sendMessage(new TextMessage("{\"type\":\"setLanguage\",\"language\":\"Tantu\"}"));
+        JsonNode echo = waitFor(hostC, "language");
+        assertThat(echo).as("sender receives the echo").isNotNull();
+        assertThat(echo.path("language").asText()).isEqualTo("tantu");
+
+        // A late joiner gets the chosen language on init.
+        Collector lateC = new Collector();
+        WebSocketSession late = connect(sid, "late", "Late", ticketStore.issue(sid, adminToken, "late"), lateC);
+        assertThat(waitFor(lateC, "init").path("language").asText()).isEqualTo("tantu");
+
+        // Anything outside the id shape falls back to auto-detect.
+        host.sendMessage(new TextMessage("{\"type\":\"setLanguage\",\"language\":\"<script>\"}"));
+        assertThat(waitFor(lateC, "language").path("language").asText()).isEmpty();
+
+        host.close(CloseStatus.NORMAL);
+        late.close(CloseStatus.NORMAL);
+    }
+
+    @Test
     void renameFromNonAdmittedClientIsDropped() throws Exception {
         Session session = sessionService.createSession("Host", "#7aa2f7");
         String sid = session.getSessionId();

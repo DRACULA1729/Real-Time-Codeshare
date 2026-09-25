@@ -4,7 +4,7 @@ import { EditorState, Compartment, Annotation, type ChangeSet } from "@codemirro
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { editorBaseTheme, highlightFor } from "../../editor/theme";
 import { remoteCursorsExtension, setRemoteCursor } from "../../editor/remoteCursors";
-import { detectLanguage } from "../../editor/languages";
+import { detectLanguage, languageFor } from "../../editor/languages";
 import { useSession } from "../../session/SessionProvider";
 import { useSessionStore } from "../../state/store";
 import { useTheme } from "../../theme/ThemeProvider";
@@ -20,9 +20,11 @@ export function EditorPane() {
   const host = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const syntaxCompartment = useRef<Compartment | null>(null);
+  const applyLanguage = useRef<() => void>(() => {});
   const session = useSession();
   const { theme } = useTheme();
   const initialDocument = useSessionStore((s) => s.initialDocument);
+  const languageChoice = useSessionStore((s) => s.languageChoice);
 
   // Build the editor once, on admission.
   useEffect(() => {
@@ -40,16 +42,21 @@ export function EditorPane() {
       }, CURSOR_THROTTLE_MS);
     };
 
+    // A picked language wins; otherwise detect from the content.
+    applyLanguage.current = () => {
+      const view = viewRef.current;
+      if (!view) return;
+      const choice = useSessionStore.getState().languageChoice;
+      const lang = choice ? languageFor(choice) : detectLanguage(view.state.doc.toString());
+      useSessionStore.getState().setLanguage(lang.label, lang.ext);
+      view.dispatch({ effects: language.reconfigure(lang.extension) });
+    };
+
     let detectTimer: ReturnType<typeof setTimeout> | 0 = 0;
     const scheduleDetect = () => {
+      if (useSessionStore.getState().languageChoice) return; // locked; nothing to detect
       if (detectTimer) clearTimeout(detectTimer);
-      detectTimer = setTimeout(() => {
-        const view = viewRef.current;
-        if (!view) return;
-        const detected = detectLanguage(view.state.doc.toString());
-        useSessionStore.getState().setLanguage(detected.label, detected.ext);
-        view.dispatch({ effects: language.reconfigure(detected.extension) });
-      }, DETECT_DEBOUNCE_MS);
+      detectTimer = setTimeout(() => applyLanguage.current(), DETECT_DEBOUNCE_MS);
     };
 
     const emitChanges = (changes: ChangeSet) => {
@@ -125,9 +132,6 @@ export function EditorPane() {
       },
     });
 
-    // Seed language detection + cursor broadcast from the initial document.
-    scheduleDetect();
-
     return () => {
       session.setDocHost(null);
       if (detectTimer) clearTimeout(detectTimer);
@@ -138,6 +142,9 @@ export function EditorPane() {
     // Build once; initialDocument is fixed at admission. Theme handled below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Seed on mount, and re-apply when anyone picks a language (or goes back to auto-detect).
+  useEffect(() => applyLanguage.current(), [languageChoice]);
 
   // Swap syntax highlighting when the app theme toggles.
   useEffect(() => {

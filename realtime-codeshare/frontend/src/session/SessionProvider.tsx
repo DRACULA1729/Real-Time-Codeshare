@@ -23,6 +23,7 @@ export interface SessionController {
   localDelete: (pos: number, length: number) => void;
   sendCursor: (pos: number) => void;
   rename: (baseName: string) => void;
+  setLanguage: (language: string) => void;
   setDocHost: (host: DocHost | null) => void;
   getDocument: () => string;
   inviteLink: () => string;
@@ -44,12 +45,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // Stable handler set that pushes connection events into the store / cursor bus.
   const handlers = useMemo<SessionHandlers>(
     () => ({
-      onInit: ({ document, version, role, token, fileName }) => {
+      onInit: ({ document, version, role, token, fileName, language }) => {
         const s = store.getState();
         if (s.sessionId) storeProfile(s.sessionId, token, s.name, s.color);
-        s.applyInit({ document, version, role, token, fileName });
+        s.applyInit({ document, version, role, token, fileName, languageChoice: language });
       },
       onRename: (fileName) => store.getState().setFileName(fileName),
+      onLanguage: (language) => store.getState().setLanguageChoice(language),
       onResyncDoc: (_document, version) => store.getState().setVersion(version),
       onPresence: (users) => store.getState().setPresence(users),
       onCursor: (clientId, pos) => cursors.push(clientId, pos),
@@ -169,6 +171,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // sanitized) value; concurrent renames converge last-write-wins.
         store.getState().setFileName(clean);
         connRef.current?.rename(clean);
+      },
+      setLanguage: (language) => {
+        // Optimistic like rename; the server echo carries the authoritative value.
+        store.getState().setLanguageChoice(language);
+        connRef.current?.setLanguage(language);
       },
       setDocHost: (host) => connRef.current?.setDocHost(host),
       getDocument: () => connRef.current?.getDocumentText() ?? "",

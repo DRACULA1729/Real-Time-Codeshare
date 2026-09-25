@@ -18,6 +18,7 @@ export interface InitMsg {
   role: Role;
   clientId?: string;
   fileName?: string; // shared base name; optional to tolerate an older server
+  language?: string; // chosen language id, "" = auto-detect; optional for older servers
 }
 export interface OpMsg {
   type: "op";
@@ -85,6 +86,10 @@ export interface RenameMsg {
   type: "rename";
   fileName: string; // server-sanitized base name, echoed to the sender too
 }
+export interface LanguageMsg {
+  type: "language";
+  language: string; // server-sanitized language id ("" = auto-detect), echoed to the sender too
+}
 
 export type WsInbound =
   | InitMsg
@@ -103,7 +108,8 @@ export type WsInbound =
   | KickedMsg
   | SessionEndedMsg
   | RenameMsg
-  | PongMsg;
+  | PongMsg
+  | LanguageMsg;
 
 // The server serializes Op via Jackson: `type` is the enum name ("INSERT" /
 // "DELETE"). Normalize to our lowercase wire model before transforming.
@@ -148,4 +154,5 @@ export type WsOutbound =
   | { type: "acceptAdmin" }
   | { type: "declineAdmin" }
   | { type: "rename"; fileName: string }
+  | { type: "setLanguage"; language: string }
   | { type: "ping" };

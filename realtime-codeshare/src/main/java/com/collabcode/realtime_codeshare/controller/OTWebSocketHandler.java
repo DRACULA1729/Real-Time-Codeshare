@@ -176,7 +176,8 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
                 "token", token,
                 "role", roleOf(sessionId, token),
                 "clientId", nullSafe(attr(session, ATTR_CLIENT_ID)),
-                "fileName", otService.getName(sessionId)
+                "fileName", otService.getName(sessionId),
+                "language", otService.getLanguage(sessionId)
         ));
         broadcastPresence(sessionId);
         if (sessionService.isAdmin(sessionId, token)) sendPendingListTo(session, sessionId);
@@ -208,6 +209,7 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             case "cursor" -> { if (requireAdmitted(session, sessionId)) handleCursor(session, sessionId, node); }
             case "resync" -> { if (requireAdmitted(session, sessionId)) handleResync(session, sessionId); }
             case "rename" -> { if (requireAdmitted(session, sessionId)) handleRename(session, sessionId, node); }
+            case "setlanguage" -> { if (requireAdmitted(session, sessionId)) handleSetLanguage(session, sessionId, node); }
             case "approve" -> { if (requireAdmin(sessionId, token)) handleApprove(sessionId, token, node); }
             case "reject" -> { if (requireAdmin(sessionId, token)) handleReject(sessionId, token, node); }
             case "kick" -> { if (requireAdmin(sessionId, token)) handleKick(sessionId, token, node); }
@@ -314,6 +316,25 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         // Echo to the sender too — the server-sanitized value is authoritative, and
         // concurrent renames converge last-write-wins in broadcast order.
         broadcast(sessionId, json(Map.of("type", "rename", "fileName", clean)), null);
+    }
+
+    /** Any admitted participant may pick the document's language ("" = back to
+     *  auto-detect). Same budget and last-write-wins echo as rename. */
+    private void handleSetLanguage(WebSocketSession session, String sessionId, JsonNode node) {
+        TokenBucket bucket = (TokenBucket) session.getAttributes().get(ATTR_BUCKET);
+        if (bucket != null && !bucket.tryAcquire()) {
+            rateLimitDrops.increment();
+            log.warn("[{}] rate limit exceeded for {}; dropping setLanguage", sessionId, session.getId());
+            return;
+        }
+        JsonNode raw = node.get("language");
+        if (raw == null || !raw.isTextual()) {
+            log.warn("[{}] dropping setLanguage with missing/non-string language", sessionId);
+            return;
+        }
+        String clean = OTService.sanitizeLanguage(raw.asText());
+        otService.setLanguage(sessionId, clean);
+        broadcast(sessionId, json(Map.of("type", "language", "language", clean)), null);
     }
 
     // ---------------- admin actions ----------------

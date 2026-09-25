@@ -27,8 +27,8 @@ public class InMemoryDocumentRepository implements DocumentRepository {
     }
 
     @Override
-    public void save(String sessionId, String text, int version, String name) {
-        docs.put(sessionId, new StoredDocument(text, version, name));
+    public void save(String sessionId, String text, int version, String name, String language) {
+        docs.put(sessionId, new StoredDocument(text, version, name, language));
     }
 
     @Override

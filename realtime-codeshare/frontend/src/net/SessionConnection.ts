@@ -20,8 +20,9 @@ export interface DocHost {
 }
 
 export interface SessionHandlers {
-  onInit(p: { document: string; version: number; role: Role; token: string; fileName: string }): void;
+  onInit(p: { document: string; version: number; role: Role; token: string; fileName: string; language: string }): void;
   onRename(fileName: string): void;
+  onLanguage(language: string): void;
   onResyncDoc(document: string, version: number): void;
   onPresence(users: PresenceUser[]): void;
   onCursor(clientId: string, pos: number): void;
@@ -183,6 +184,12 @@ export class SessionConnection {
     this.sendRaw({ type: "rename", fileName: baseName });
   }
 
+  /** Pick the document's language for everyone ("" = back to auto-detect). */
+  setLanguage(language: string): void {
+    if (!this.admitted) return;
+    this.sendRaw({ type: "setLanguage", language });
+  }
+
   // ---- admin actions ----
   approve(joinKey: string): void {
     this.sendRaw({ type: "approve", joinKey });
@@ -240,6 +247,7 @@ export class SessionConnection {
           role: this.role,
           token: this.token!,
           fileName: msg.fileName ?? "",
+          language: msg.language ?? "",
         });
         break;
       }
@@ -258,6 +266,9 @@ export class SessionConnection {
         break;
       case "rename":
         this.h.onRename(msg.fileName ?? "");
+        break;
+      case "language":
+        this.h.onLanguage(msg.language ?? "");
         break;
       case "presence":
         for (const u of msg.users) if (u.clientId === this.clientId) this.role = u.role;

@@ -39,12 +39,13 @@ public class RedisDocumentRepository implements DocumentRepository {
     }
 
     @Override
-    public void save(String sessionId, String text, int version, String name) {
+    public void save(String sessionId, String text, int version, String name, String language) {
         String k = key(sessionId);
         redis.opsForHash().putAll(k, Map.of(
                 "text", text == null ? "" : text,
                 "version", Integer.toString(version),
-                "name", name == null ? "" : name));
+                "name", name == null ? "" : name,
+                "language", language == null ? "" : language));
         redis.expire(k, ttl); // refresh on every write; abandoned rooms expire
     }
 
@@ -60,7 +61,8 @@ public class RedisDocumentRepository implements DocumentRepository {
             version = 0;
         }
         String name = String.valueOf(h.getOrDefault("name", ""));
-        return Optional.of(new StoredDocument(text, version, name));
+        String language = String.valueOf(h.getOrDefault("language", ""));
+        return Optional.of(new StoredDocument(text, version, name, language));
     }
 
     @Override

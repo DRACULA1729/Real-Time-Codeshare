@@ -48,9 +48,9 @@ class DocumentPersistenceTest {
         java.util.List<String> saves = new java.util.ArrayList<>();
         DocumentRepository repo = new InMemoryDocumentRepository() {
             @Override
-            public void save(String sessionId, String text, int version, String name) {
+            public void save(String sessionId, String text, int version, String name, String language) {
                 saves.add(sessionId + ":" + text);
-                super.save(sessionId, text, version, name);
+                super.save(sessionId, text, version, name, language);
             }
         };
         OTService ot = new OTService(repo);
@@ -67,6 +67,17 @@ class DocumentPersistenceTest {
         ot.persistDirty();
         assertThat(saves).hasSize(2);
         assertThat(repo.load("S")).get().extracting(StoredDocument::name).isEqualTo("renamed");
+    }
+
+    @Test
+    void chosenLanguageSurvivesReload() {
+        DocumentRepository repo = new InMemoryDocumentRepository();
+        OTService ot = new OTService(repo);
+        ot.applyOp("S", insert(0, "fn main() -> Unit:"));
+        ot.setLanguage("S", "tantu");
+        ot.persist("S");
+
+        assertThat(new OTService(repo).getLanguage("S")).isEqualTo("tantu");
     }
 
     @Test
