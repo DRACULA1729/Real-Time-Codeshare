@@ -147,6 +147,37 @@ class SessionServiceTest {
     }
 
     @Test
+    void everyoneDeclining_seatIsOfferedAgainLater_andToAMemberWhoReconnects() {
+        SessionService svc = newService();
+        String[] r = roomWithTwoJoiners(svc);
+        String sid = r[0], host = r[1], a = r[2], b = r[3];
+
+        assertEquals(a, svc.markInactive(sid, host));
+        assertEquals(b, svc.declineAdmin(sid, a));
+        assertNull(svc.declineAdmin(sid, b), "everyone declined: no offer right now");
+        assertEquals(a, svc.reofferVacantSeat(sid), "a later round starts again from the longest-present");
+        assertNull(svc.reofferVacantSeat(sid), "only one offer out at a time");
+
+        assertTrue(svc.acceptAdmin(sid, a));
+        assertNull(svc.reofferVacantSeat(sid), "seat filled -> nothing to offer");
+    }
+
+    @Test
+    void endedSessionRefusesEveryone_andAWaiterKeepsItsJoinKey() {
+        SessionService svc = newService();
+        Session s = svc.createSession("Host", "#fff");
+        String sid = s.getSessionId();
+        JoinResult w1 = svc.evaluateJoin(sid, null, "cw", "W", "#0f0");
+        JoinResult w2 = svc.evaluateJoin(sid, w1.token(), "cw", "W", "#0f0"); // waiter reconnects
+        assertEquals(w1.joinKey(), w2.joinKey(), "no duplicate request for the admin");
+
+        svc.disconnectAll(sid);
+        assertTrue(svc.isEnded(sid));
+        assertEquals(JoinOutcome.DENIED, svc.evaluateJoin(sid, s.getCreatorToken(), "c", "Host", "#fff").outcome(),
+                "even the host can't reopen an ended session");
+    }
+
+    @Test
     void roomStaysAliveWhileMembersConnected_andReapsWhenEmptyAndIdle() {
         SessionService svc = newService();
         Session s = svc.createSession("Host", "#fff");

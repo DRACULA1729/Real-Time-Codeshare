@@ -52,4 +52,10 @@ describe("detectLanguage", () => {
   it.each(OTHERS)("still detects %s", (id, code) => {
     expect(detectLanguage(code).id).toBe(id);
   });
+
+  it("stays fast on a huge unbroken token (minified / base64 paste)", () => {
+    const t0 = performance.now();
+    detectLanguage("x".repeat(70_000));
+    expect(performance.now() - t0).toBeLessThan(1000);
+  });
 });

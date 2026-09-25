@@ -18,6 +18,8 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -275,13 +277,86 @@ class WsHandlerIntegrationTest {
         assertThat(repository.load(sid)).as("durable snapshot survives end-session")
                 .get().extracting(StoredDocument::text).isEqualTo("keep");
 
-        // Within the grace window the host can reopen the room and gets the document back.
-        Collector againC = new Collector();
-        WebSocketSession again = connect(sid, "host2", "Host", ticketStore.issue(sid, adminToken, "host2"), againC);
-        JsonNode init = waitFor(againC, "init");
-        assertThat(init).isNotNull();
-        assertThat(init.path("document").asText()).isEqualTo("keep");
+        // "Ended" is final: nobody (not even the host, e.g. mid-reconnect) reopens it.
+        assertThat(sessionService.isEnded(sid)).isTrue();
+        assertThatThrownBy(() -> connect(sid, "host2", "Host", ticketStore.issue(sid, adminToken, "host2"), new Collector()))
+                .as("handshake into an ended session is refused").isNotNull();
+    }
+
+    @Test
+    void catchupReplaysMissedOpsThenCaughtUp() throws Exception {
+        Session session = sessionService.createSession("Host", "#7aa2f7");
+        String sid = session.getSessionId();
+        Collector c = new Collector();
+        WebSocketSession host = connect(sid, "host", "Host", ticketStore.issue(sid, session.getCreatorToken(), "host"), c);
+        assertThat(waitFor(c, "init")).isNotNull();
+        host.sendMessage(new TextMessage("{\"type\":\"insert\",\"baseVersion\":0,\"pos\":0,\"text\":\"a\"}"));
+        host.sendMessage(new TextMessage("{\"type\":\"insert\",\"baseVersion\":1,\"pos\":1,\"text\":\"b\"}"));
+        long end = System.currentTimeMillis() + 5000;
+        while (otService.getVersion(sid) < 2 && System.currentTimeMillis() < end) Thread.sleep(20);
+
+        Collector r = new Collector();
+        WebSocketSession again = connect(sid, "host2", "Host", ticketStore.issue(sid, session.getCreatorToken(), "host2"), r);
+        assertThat(waitFor(r, "init")).isNotNull();
+        again.sendMessage(new TextMessage("{\"type\":\"catchup\",\"from\":0}"));
+        List<Integer> versions = new ArrayList<>();
+        JsonNode done = null;
+        end = System.currentTimeMillis() + 5000;
+        while (done == null && System.currentTimeMillis() < end) {
+            String msg = r.q.poll(200, TimeUnit.MILLISECONDS);
+            if (msg == null) continue;
+            JsonNode n = mapper.readTree(msg);
+            if ("op".equals(n.path("type").asText())) versions.add(n.path("version").asInt());
+            if ("caughtUp".equals(n.path("type").asText())) done = n;
+        }
+        assertThat(done).isNotNull();
+        assertThat(done.path("version").asInt()).isEqualTo(2);
+        assertThat(versions).containsExactly(1, 2);
+        host.close(CloseStatus.NORMAL);
         again.close(CloseStatus.NORMAL);
+    }
+
+    @Test
+    void opsAreAttributedToTheSocketAndBadOnesAreNacked() throws Exception {
+        Session session = sessionService.createSession("Host", "#7aa2f7");
+        String sid = session.getSessionId();
+        Collector c = new Collector();
+        WebSocketSession host = connect(sid, "host", "Host", ticketStore.issue(sid, session.getCreatorToken(), "host"), c);
+        assertThat(waitFor(c, "init")).isNotNull();
+
+        // A claimed clientId is ignored (committed under the socket's id); an unknown field is tolerated.
+        host.sendMessage(new TextMessage("{\"type\":\"insert\",\"clientId\":\"victim\",\"baseVersion\":0,\"pos\":0,\"text\":\"x\",\"extra\":1}"));
+        JsonNode op = waitFor(c, "op");
+        assertThat(op).isNotNull();
+        assertThat(op.path("op").path("clientId").asText()).isEqualTo("host");
+
+        // An op that can never apply is nacked and followed by a forced resync.
+        host.sendMessage(new TextMessage("{\"type\":\"insert\",\"baseVersion\":99,\"pos\":0,\"text\":\"future\"}"));
+        assertThat(waitFor(c, "nack").path("reason").asText()).isEqualTo("invalid");
+        assertThat(waitFor(c, "resync").path("required").asBoolean()).isTrue();
+        host.close(CloseStatus.NORMAL);
+    }
+
+    @Test
+    void kickClosesEverySocketOfThatMember() throws Exception {
+        Session session = sessionService.createSession("Host", "#7aa2f7");
+        String sid = session.getSessionId();
+        Collector hostC = new Collector();
+        WebSocketSession host = connect(sid, "host", "Host", ticketStore.issue(sid, session.getCreatorToken(), "host"), hostC);
+        assertThat(waitFor(hostC, "init")).isNotNull();
+        Collector g1 = new Collector();
+        connect(sid, "g1", "Guest", ticketStore.issue(sid, null, "g1"), g1);
+        String token = waitFor(g1, "waitingForApproval").path("token").asText();
+        host.sendMessage(new TextMessage("{\"type\":\"approve\",\"joinKey\":\"" + waitFor(hostC, "joinRequest").path("joinKey").asText() + "\"}"));
+        assertThat(waitFor(g1, "init")).isNotNull();
+        Collector g2 = new Collector(); // same member, second socket (another tab / a raw socket)
+        connect(sid, "g2", "Guest", ticketStore.issue(sid, token, "g2"), g2);
+        assertThat(waitFor(g2, "init")).isNotNull();
+
+        host.sendMessage(new TextMessage("{\"type\":\"kick\",\"clientId\":\"g1\"}"));
+        assertThat(waitFor(g1, "kicked")).isNotNull();
+        assertThat(waitFor(g2, "kicked")).as("the second socket goes too").isNotNull();
+        host.close(CloseStatus.NORMAL);
     }
 
     @Test

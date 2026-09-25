@@ -82,6 +82,14 @@ export interface SessionEndedMsg {
 export interface PongMsg {
   type: "pong"; // heartbeat reply
 }
+export interface NackMsg {
+  type: "nack"; // the server didn't commit our in-flight op
+  reason: "rate" | "invalid"; // rate: retry shortly; invalid: drop it (a forced resync follows)
+}
+export interface CaughtUpMsg {
+  type: "caughtUp"; // end of a catchup replay
+  version: number;
+}
 export interface RenameMsg {
   type: "rename";
   fileName: string; // server-sanitized base name, echoed to the sender too
@@ -109,6 +117,8 @@ export type WsInbound =
   | SessionEndedMsg
   | RenameMsg
   | PongMsg
+  | NackMsg
+  | CaughtUpMsg
   | LanguageMsg;
 
 // The server serializes Op via Jackson: `type` is the enum name ("INSERT" /
@@ -155,4 +165,5 @@ export type WsOutbound =
   | { type: "declineAdmin" }
   | { type: "rename"; fileName: string }
   | { type: "setLanguage"; language: string }
-  | { type: "ping" };
+  | { type: "ping" }
+  | { type: "catchup"; from: number };

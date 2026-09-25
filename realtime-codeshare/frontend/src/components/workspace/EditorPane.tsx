@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, keymap } from "@codemirror/view";
-import { EditorState, Compartment, Annotation, type ChangeSet } from "@codemirror/state";
+import { EditorState, Compartment, Annotation, Transaction, type ChangeSet } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { editorBaseTheme, highlightFor } from "../../editor/theme";
 import { remoteCursorsExtension, setRemoteCursor } from "../../editor/remoteCursors";
@@ -13,6 +13,9 @@ import type { Op } from "../../ot/ops";
 // Marks transactions whose changes came from a remote op, so the update listener
 // doesn't echo them back to the server as local edits.
 const REMOTE = Annotation.define<boolean>();
+// Other people's edits (and resyncs) stay out of undo history, so Ctrl+Z only ever
+// reverts your own changes instead of broadcasting the removal of someone else's.
+const NOT_UNDOABLE = Transaction.addToHistory.of(false);
 const CURSOR_THROTTLE_MS = 70;
 const DETECT_DEBOUNCE_MS = 600;
 
@@ -117,17 +120,17 @@ export function EditorPane() {
       applyRemote: (op: Op) => {
         if (op.type === "insert") {
           const from = clamp(op.pos);
-          view.dispatch({ changes: { from, insert: op.text }, annotations: REMOTE.of(true) });
+          view.dispatch({ changes: { from, insert: op.text }, annotations: [REMOTE.of(true), NOT_UNDOABLE] });
         } else {
           const from = clamp(op.pos);
           const to = clamp(op.pos + op.length);
-          if (to > from) view.dispatch({ changes: { from, to }, annotations: REMOTE.of(true) });
+          if (to > from) view.dispatch({ changes: { from, to }, annotations: [REMOTE.of(true), NOT_UNDOABLE] });
         }
       },
       replaceText: (text: string) => {
         view.dispatch({
           changes: { from: 0, to: view.state.doc.length, insert: text },
-          annotations: REMOTE.of(true),
+          annotations: [REMOTE.of(true), NOT_UNDOABLE],
         });
       },
     });

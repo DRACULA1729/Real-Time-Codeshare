@@ -1,6 +1,7 @@
 package com.collabcode.realtime_codeshare.ot;
 
 import com.collabcode.realtime_codeshare.persistence.DocumentRepository;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -126,6 +127,13 @@ public class OTService {
         repository.delete(sessionId);
     }
 
+    /** Committed ops after {@code fromVersion}, oldest first, so a reconnecting client
+     *  can replay what it missed through its normal OT loop. Null when that range is
+     *  no longer (or not yet) available — the caller falls back to a forced resync. */
+    public List<CommittedOp> opsSince(String sessionId, int fromVersion) {
+        return getOrCreateStore(sessionId).opsSince(fromVersion);
+    }
+
     public String getDocument(String sessionId) {
         return getOrCreateStore(sessionId).getDocument();
     }
@@ -198,13 +206,17 @@ public class OTService {
         switch (type) {
             case "insert" -> {
                 String text = dto.text == null ? "" : dto.text;
+                // No-op inserts would still bump the version (and push others past the
+                // compaction floor); CR would desync CodeMirror, which stores only LF.
+                if (text.isEmpty()) throw new InvalidOpException("insert text must not be empty");
+                if (text.indexOf('\r') >= 0) throw new InvalidOpException("insert text must use \\n line breaks, not \\r");
                 if (text.length() > MAX_OP_LEN)
                     throw new InvalidOpException("insert text exceeds " + MAX_OP_LEN + " chars");
                 return new InsertOp(dto.clientId, dto.baseVersion, dto.pos, text);
             }
             case "delete" -> {
                 int length = dto.length == null ? 0 : dto.length;
-                if (length < 0) throw new InvalidOpException("delete length must be >= 0");
+                if (length <= 0) throw new InvalidOpException("delete length must be > 0");
                 if (length > MAX_OP_LEN)
                     throw new InvalidOpException("delete length exceeds " + MAX_OP_LEN);
                 return new DeleteOp(dto.clientId, dto.baseVersion, dto.pos, length);
@@ -446,6 +458,10 @@ public class OTService {
          */
         public synchronized ApplyResult commit(Op incoming) {
             int base = incoming.getBaseVersion();
+            if (base > version.get()) {
+                // A client can't have built on a version that doesn't exist yet.
+                throw new InvalidOpException("baseVersion " + base + " is ahead of the document (v" + version.get() + ")");
+            }
             if (base < compactedThroughVersion) {
                 throw new ResyncRequiredException(
                         "baseVersion " + base + " below compaction floor " + compactedThroughVersion);
@@ -476,6 +492,15 @@ public class OTService {
                 compactBelow(newVersion - MAX_HISTORY);
             }
             return new ApplyResult(newVersion, transformed);
+        }
+
+        /** Ops committed after {@code from}, or null if {@code from} is below the
+         *  compaction floor (history gone) or ahead of the current version. */
+        public synchronized List<CommittedOp> opsSince(int from) {
+            if (from < compactedThroughVersion || from > version.get()) return null;
+            List<CommittedOp> out = new ArrayList<>();
+            for (CommittedOp co : history) if (co.version > from) out.add(co);
+            return out;
         }
 
         /** Atomic (document, version, SHA-256 digest) snapshot for re-sync. The
@@ -512,6 +537,7 @@ public class OTService {
         }
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true) // an extra field must not silently drop an edit
     public static class OpDTO {
         public String clientId;
         public String type;

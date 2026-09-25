@@ -66,12 +66,17 @@ export function languageFor(id: string): DetectedLanguage {
   return { id, label: entry.label, ext: entry.ext, extension: entry.make() };
 }
 
+// highlightAuto runs every grammar over the text and is super-linear on long
+// unbroken runs (70k chars of one token took ~60s, on every client, after every
+// edit). The head of a file identifies its language; 2,000 chars stays ~50ms worst case.
+const DETECT_SAMPLE = 2000;
+
 /** Auto-detect the language of `code` (mirrors the legacy hljs.highlightAuto). */
 export function detectLanguage(code: string): DetectedLanguage {
   if (!code.trim()) return PLAIN;
   let id: string | undefined;
   try {
-    id = hljs.highlightAuto(code, SUBSET).language;
+    id = hljs.highlightAuto(code.slice(0, DETECT_SAMPLE), SUBSET).language;
   } catch {
     id = undefined;
   }

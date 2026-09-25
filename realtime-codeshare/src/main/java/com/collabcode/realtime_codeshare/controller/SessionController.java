@@ -88,6 +88,9 @@ public class SessionController {
         if (!sessionService.exists(id)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "unknown session");
         }
+        if (sessionService.isEnded(id)) {
+            throw new ResponseStatusException(HttpStatus.GONE, "session ended");
+        }
         String token = req == null ? null : req.token;
         String clientId = req == null ? null : req.clientId;
         String ticket = ticketStore.issue(id, token, clientId);

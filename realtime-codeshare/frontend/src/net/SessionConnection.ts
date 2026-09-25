@@ -45,6 +45,11 @@ const HEARTBEAT_MS = 25_000; // under the ~60s idle cut-off of common proxies
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const MAX_RECONNECT_ATTEMPTS = 10; // ~3-4 min of backoff before showing "disconnected"
+const GAP_WAIT_MS = 400; // out-of-order op: wait this long for the gap to fill, then ask for a catchup
+const NACK_RETRY_MS = 300; // rate-limited op: resend after this
+// Inserts are split so a frame stays under the server's 64 KB cap even when every
+// char JSON-escapes to 6 bytes (8000 * 6 = 48 KB plus envelope).
+const MAX_INSERT_CHUNK = 8000;
 
 // Ports the codeshare.js connection lifecycle: connect with optional token,
 // admit on `init`, run the Jupiter OT loop on `op`, self-heal on idle via
@@ -64,6 +69,12 @@ export class SessionConnection {
   private everAdmitted = false;
   private reconnectAttempts = 0;
   private awaitingPong = false;
+  private waiting = false; // in the waiting room: a drop reconnects instead of "not found"
+  // After a reconnect, op sends are held until the missed ops have been replayed.
+  private resuming = false;
+  // Ops that arrived ahead of a gap in the version sequence, applied once it fills.
+  private readonly early = new Map<number, Op>();
+  private gapTimer: ReturnType<typeof setTimeout> | null = null;
 
   private ws: WebSocket | null = null;
   private docHost: DocHost | null = null;
@@ -82,7 +93,7 @@ export class SessionConnection {
     this.color = opts.color;
     this.token = opts.token;
     this.ot = new OtClient(
-      (op) => this.sendRaw(op),
+      (op) => { if (!this.resuming) this.sendRaw(op); },
       (op) => this.docHost?.applyRemote(op),
     );
   }
@@ -109,6 +120,11 @@ export class SessionConnection {
     } catch (e) {
       // Session gone (404/400) is terminal; anything else (network, 5xx) is a failed
       // attempt like a failed upgrade: unavailable before admission, retried after.
+      if (e instanceof ApiError && e.status === 410) {
+        this.denied = true; // ended by the host: final, not "not found"
+        this.h.onSessionEnded();
+        return;
+      }
       if (e instanceof ApiError && (e.status === 404 || e.status === 400)) this.reconnectAttempts = 0;
       this.onClose();
       return;
@@ -159,6 +175,8 @@ export class SessionConnection {
 
   private stopTimers(): void {
     if (this.probeTimer) clearTimeout(this.probeTimer);
+    if (this.gapTimer) clearTimeout(this.gapTimer);
+    this.gapTimer = null;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.heartbeatTimer = this.reconnectTimer = null;
@@ -166,7 +184,13 @@ export class SessionConnection {
 
   // ---- editor -> wire ----
   localInsert(pos: number, text: string): void {
-    this.ot.submitLocal({ type: "insert", clientId: this.clientId, baseVersion: this.ot.baseVersion, pos, text });
+    for (let i = 0; i < text.length; ) {
+      let end = Math.min(i + MAX_INSERT_CHUNK, text.length);
+      const code = text.charCodeAt(end - 1);
+      if (end < text.length && code >= 0xd800 && code <= 0xdbff) end--; // don't split a surrogate pair
+      this.ot.submitLocal({ type: "insert", clientId: this.clientId, baseVersion: this.ot.baseVersion, pos: pos + i, text: text.slice(i, end) });
+      i = end;
+    }
   }
 
   localDelete(pos: number, length: number): void {
@@ -233,14 +257,23 @@ export class SessionConnection {
       case "init": {
         // Auto-reconnect keeps the mounted editor: rebase its unacked edits onto
         // the server copy (as a forced resync does); the idle probe then verifies.
+        // Auto-reconnect keeps the mounted editor and its OT state: replay the ops we
+        // missed through the normal loop (catchup), which transforms our unacked edits
+        // and dedupes one whose ack was lost; unacked sends wait until caughtUp.
         const resuming = this.everAdmitted && this.docHost !== null;
         this.admitted = true;
         this.everAdmitted = true;
+        this.waiting = false;
         this.reconnectAttempts = 0;
         this.token = msg.token || this.token;
         this.role = msg.role || "JOINER";
-        if (resuming) this.rebaseOnto(msg.document || "", msg.version || 0);
-        else this.ot.reset(msg.version || 0);
+        this.early.clear();
+        if (resuming) {
+          this.resuming = true;
+          this.sendRaw({ type: "catchup", from: this.ot.baseVersion });
+        } else {
+          this.ot.reset(msg.version || 0);
+        }
         this.h.onInit({
           document: msg.document || "",
           version: msg.version || 0,
@@ -252,8 +285,18 @@ export class SessionConnection {
         break;
       }
       case "op":
-        this.ot.onServerOp(normalizeOp(msg.op), msg.version, this.clientId);
+        this.onServerOp(normalizeOp(msg.op), msg.version);
+        break;
+      case "caughtUp":
+        if (this.resuming) {
+          this.resuming = false;
+          this.ot.resendOutstanding(); // never sent on this socket
+        }
         if (this.ot.isQuiescent()) this.scheduleProbe();
+        break;
+      case "nack":
+        if (msg.reason === "invalid") this.ot.discardOutstanding(); // a forced resync follows
+        else setTimeout(() => { if (!this.resuming) this.ot.resendOutstanding(); }, NACK_RETRY_MS);
         break;
       case "resync":
         this.handleResync(msg.document || "", msg.version || 0, msg.hash, msg.required ?? false);
@@ -275,6 +318,8 @@ export class SessionConnection {
         this.h.onPresence(msg.users);
         break;
       case "waitingForApproval":
+        this.waiting = true;
+        this.reconnectAttempts = 0;
         this.token = msg.token;
         this.h.onWaiting(msg.token);
         break;
@@ -320,8 +365,35 @@ export class SessionConnection {
   //  - routine self-heal: only adopt the snapshot if we're still caught up and
   //    actually diverged (SHA-256 mismatch), so we never clobber edits made while
   //    the resync was in flight.
+  // Ops carry consecutive versions. Duplicates (catchup overlap) are skipped; one
+  // that arrives ahead of a gap (concurrent commits can be broadcast out of order)
+  // waits for the gap to fill, and a gap that persists triggers a catchup.
+  private onServerOp(op: Op, version: number): void {
+    if (version <= this.ot.baseVersion) return;
+    if (version > this.ot.baseVersion + 1) {
+      this.early.set(version, op);
+      if (!this.gapTimer) {
+        this.gapTimer = setTimeout(() => {
+          this.gapTimer = null;
+          if (this.early.size) this.sendRaw({ type: "catchup", from: this.ot.baseVersion });
+        }, GAP_WAIT_MS);
+      }
+      return;
+    }
+    this.ot.onServerOp(op, version, this.clientId);
+    let next: Op | undefined;
+    while ((next = this.early.get(this.ot.baseVersion + 1))) {
+      this.early.delete(this.ot.baseVersion + 1);
+      this.ot.onServerOp(next, this.ot.baseVersion + 1, this.clientId);
+    }
+    for (const v of this.early.keys()) if (v <= this.ot.baseVersion) this.early.delete(v);
+    if (this.ot.isQuiescent()) this.scheduleProbe();
+  }
+
   private handleResync(document: string, version: number, hash: string, required: boolean): void {
     if (required) {
+      this.resuming = false;
+      this.early.clear();
       this.rebaseOnto(document, version);
       this.h.onResyncDoc(document, version);
       return;
@@ -335,10 +407,9 @@ export class SessionConnection {
     this.scheduleProbe();
   }
 
-  // Adopt the authoritative snapshot, then replay unacked local edits from the new
-  // base. Exact when nothing was committed meanwhile (version unchanged).
-  // ponytail: after a reconnect where the server moved on, an op in flight at the
-  // drop may be replayed twice if its ack was lost; dedupe via server op history if it bites.
+  // Last resort when the server's history no longer reaches our base (compaction or a
+  // restart): adopt the snapshot and replay unacked edits from the new base.
+  // ponytail: replayed edits keep their old positions here; only hit past ~2000 missed ops.
   private rebaseOnto(document: string, version: number): void {
     const pending = this.ot.capturePending();
     this.docHost?.replaceText(document);
@@ -359,8 +430,8 @@ export class SessionConnection {
     this.stopTimers();
     this.ws = null;
     if (this.intentionalClose || this.denied) return; // user left, or terminal state already surfaced
-    if (this.admitted || this.reconnectAttempts > 0) {
-      this.admitted = false; // dropped while admitted, or a retry failed: back off and redial
+    if (this.admitted || this.waiting || this.reconnectAttempts > 0) {
+      this.admitted = false; // dropped while admitted/waiting, or a retry failed: back off and redial
       this.scheduleReconnect();
     } else {
       this.h.onUnavailable();

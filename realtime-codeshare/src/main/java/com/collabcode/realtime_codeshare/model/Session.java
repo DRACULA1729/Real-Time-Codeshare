@@ -40,6 +40,8 @@ public class Session {
     private final Set<String> adminOfferDeclined = new HashSet<>();
 
     private volatile long lastActivityMs;
+    /** The admin ended the room: no new tickets or joins; it idles to the normal reap. */
+    private volatile boolean ended;
 
     public Session(String sessionId, User creator) {
         this.sessionId = sessionId;
@@ -62,6 +64,9 @@ public class Session {
     public Map<String, User> getPendingByJoinKey() { return pendingByJoinKey; }
     public Map<String, Integer> getRejectedByToken() { return rejectedByToken; }
     public Set<String> getActiveOrder() { return activeOrder; }
+
+    public boolean isEnded() { return ended; }
+    public void markEnded() { ended = true; }
 
     public String getAdminOfferToken() { return adminOfferToken; }
     public long getAdminOfferDeadlineMs() { return adminOfferDeadlineMs; }

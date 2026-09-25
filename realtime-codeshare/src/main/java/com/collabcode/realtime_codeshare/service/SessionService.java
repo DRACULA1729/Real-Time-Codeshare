@@ -76,6 +76,12 @@ public class SessionService {
 
     public boolean exists(String id) { return sessions.containsKey(id); }
 
+    /** Ended by its admin: kept only until the reap deletes it and its snapshot. */
+    public boolean isEnded(String id) {
+        Session s = sessions.get(id);
+        return s != null && s.isEnded();
+    }
+
     /** Number of live sessions (for the global active-session cap). */
     public int count() { return sessions.size(); }
 
@@ -105,6 +111,7 @@ public class SessionService {
         if (session == null) return new JoinResult(JoinOutcome.DENIED, null, null, null, "unknown session");
 
         synchronized (session) {
+            if (session.isEnded()) return new JoinResult(JoinOutcome.DENIED, null, null, null, "session ended");
             session.touch(System.currentTimeMillis());
 
             // Already approved (creator or a previously-admitted joiner reconnecting).
@@ -127,9 +134,11 @@ public class SessionService {
                 return new JoinResult(JoinOutcome.DENIED, effectiveToken, null, null, "rejected too many times");
             }
 
-            // Replace any stale pending entry for this token, then enqueue a fresh request.
-            session.getPendingByJoinKey().values().removeIf(u -> effectiveToken.equals(u.getToken()));
-            String joinKey = randomJoinKey();
+            // A reconnecting waiter keeps its join key, so the admin's list doesn't
+            // grow a duplicate request (the client de-dupes by key).
+            String joinKey = session.getPendingByJoinKey().entrySet().stream()
+                    .filter(e -> effectiveToken.equals(e.getValue().getToken()))
+                    .map(Map.Entry::getKey).findFirst().orElseGet(this::randomJoinKey);
             session.getPendingByJoinKey().put(joinKey,
                     new User(effectiveToken, clientId, safeName(name), safeColor(color), Role.JOINER));
             return new JoinResult(JoinOutcome.PENDING, effectiveToken, joinKey, Role.JOINER, null);
@@ -276,15 +285,40 @@ public class SessionService {
         }
     }
 
-    /** Admin ended the room: nobody is connected any more, so it idles toward the
-     *  normal reap (which alone deletes the durable snapshot). */
+    /** Admin ended the room: it is marked ended (no more tickets or joins) and idles
+     *  toward the normal reap, which alone deletes the durable snapshot. */
     public void disconnectAll(String sessionId) {
         Session s = sessions.get(sessionId);
         if (s == null) return;
         synchronized (s) {
+            s.markEnded();
             s.getActiveOrder().clear();
             clearAdminOffer(s);
             s.touch(System.currentTimeMillis());
+        }
+    }
+
+    /** Token currently holding the admin offer, or null. */
+    public String adminOfferToken(String sessionId) {
+        Session s = sessions.get(sessionId);
+        if (s == null) return null;
+        synchronized (s) { return s.getAdminOfferToken(); }
+    }
+
+    /**
+     * If the admin seat is vacant (admin not connected) with no offer out but members
+     * are connected, start a fresh round of offers. Covers "everyone declined" (retried
+     * later) and a member reconnecting into a room whose admin is gone.
+     * @return the token newly offered admin, otherwise null.
+     */
+    public String reofferVacantSeat(String sessionId) {
+        Session s = sessions.get(sessionId);
+        if (s == null) return null;
+        synchronized (s) {
+            if (s.isEnded() || s.getAdminOfferToken() != null || s.getActiveOrder().isEmpty()
+                    || s.getActiveOrder().contains(s.getCurrentAdminToken())) return null;
+            s.getAdminOfferDeclined().clear();
+            return offerAdminSeat(sessionId, s, null);
         }
     }
 

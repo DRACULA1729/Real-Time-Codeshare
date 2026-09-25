@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -135,6 +136,11 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         raw.getAttributes().put(ATTR_CURSOR_BUCKET, new TokenBucket(cursorsPerSec));
 
         String clientId = attr(raw, ATTR_CLIENT_ID);
+        if (clientIdTakenByOtherToken(sessionId, clientId, attr(raw, ATTR_TOKEN))) {
+            log.warn("[{}] rejecting connection: clientId already in use by another member", sessionId);
+            raw.close(CloseStatus.POLICY_VIOLATION);
+            return;
+        }
         SessionService.JoinResult jr = sessionService.evaluateJoin(
                 sessionId, attr(raw, ATTR_TOKEN), clientId, attr(raw, ATTR_NAME), attr(raw, ATTR_COLOR));
         raw.getAttributes().put(ATTR_TOKEN, jr.token());           // effective (possibly minted) token
@@ -181,6 +187,12 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         ));
         broadcastPresence(sessionId);
         if (sessionService.isAdmin(sessionId, token)) sendPendingListTo(session, sessionId);
+        // After init (which resets the client's prompt): a reconnect must not lose an
+        // offer it still holds, and a member arriving in a host-less room gets one.
+        if (token != null && token.equals(sessionService.adminOfferToken(sessionId))) {
+            sendJson(session, Map.of("type", "adminOffer"));
+        }
+        offerAdmin(sessionId, sessionService.reofferVacantSeat(sessionId));
         log.info("Session {}: admitted {} as {}", sessionId, attr(session, ATTR_CLIENT_ID), roleOf(sessionId, token));
     }
 
@@ -207,7 +219,8 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             case "ping" -> sendJson(session, Map.of("type", "pong"));
             case "insert", "delete" -> { if (requireAdmitted(session, sessionId)) handleOp(session, sessionId, node); }
             case "cursor" -> { if (requireAdmitted(session, sessionId)) handleCursor(session, sessionId, node); }
-            case "resync" -> { if (requireAdmitted(session, sessionId)) handleResync(session, sessionId); }
+            case "resync" -> { if (requireAdmitted(session, sessionId) && chargeCursorBudget(session)) handleResync(session, sessionId); }
+            case "catchup" -> { if (requireAdmitted(session, sessionId) && chargeCursorBudget(session)) handleCatchup(session, sessionId, node); }
             case "rename" -> { if (requireAdmitted(session, sessionId)) handleRename(session, sessionId, node); }
             case "setlanguage" -> { if (requireAdmitted(session, sessionId)) handleSetLanguage(session, sessionId, node); }
             case "approve" -> { if (requireAdmin(sessionId, token)) handleApprove(sessionId, token, node); }
@@ -215,12 +228,15 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             case "kick" -> { if (requireAdmin(sessionId, token)) handleKick(sessionId, token, node); }
             case "endsession" -> { if (requireAdmin(sessionId, token)) endSession(sessionId); }
             case "acceptadmin" -> {
-                if (requireAdmitted(session, sessionId) && sessionService.acceptAdmin(sessionId, token)) {
-                    announceAdmin(sessionId, token);
-                }
+                if (!requireAdmitted(session, sessionId)) return;
+                if (sessionService.acceptAdmin(sessionId, token)) announceAdmin(sessionId, token);
+                else sendJson(session, Map.of("type", "adminOfferWithdrawn")); // lost the race / stale prompt
             }
             case "declineadmin" -> {
-                if (requireAdmitted(session, sessionId)) offerAdmin(sessionId, sessionService.declineAdmin(sessionId, token));
+                if (!requireAdmitted(session, sessionId)) return;
+                String next = sessionService.declineAdmin(sessionId, token);
+                if (next != null) offerAdmin(sessionId, next);
+                else scheduleReoffer(sessionId); // everyone declined: ask again later, never lock for good
             }
             default -> log.warn("[{}] ignoring message of unknown type '{}'", sessionId, type);
         }
@@ -232,21 +248,29 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         TokenBucket bucket = (TokenBucket) session.getAttributes().get(ATTR_BUCKET);
         if (bucket != null && !bucket.tryAcquire()) {
             rateLimitDrops.increment();
-            log.warn("[{}] rate limit exceeded for {}; dropping op", sessionId, session.getId());
+            log.warn("[{}] rate limit exceeded for {}; nacking op", sessionId, session.getId());
+            // Never drop an edit silently: the client waits for an ack per op, so tell
+            // it to retry (it backs off), instead of leaving it stuck showing "synced".
+            sendJson(session, Map.of("type", "nack", "reason", "rate"));
             return;
         }
         OTService.OpDTO dto;
         try {
             dto = mapper.treeToValue(node, OTService.OpDTO.class);
         } catch (Exception e) {
-            log.warn("[{}] dropping malformed op: {}", sessionId, e.getMessage());
+            log.warn("[{}] rejected malformed op: {}", sessionId, e.getMessage());
+            rejectOp(session, sessionId);
             return;
         }
+        // Attribute the op to the socket, never to a client-claimed id (else a member
+        // could post as someone else and consume their ack).
+        dto.clientId = attr(session, ATTR_CLIENT_ID);
         OTService.ApplyResult result;
         try {
             result = otService.applyOp(sessionId, dto);
         } catch (InvalidOpException e) {
             log.warn("[{}] rejected invalid op: {}", sessionId, e.getMessage());
+            rejectOp(session, sessionId);
             return;
         } catch (ResyncRequiredException e) {
             // Client is too far behind to transform safely; force it to rebase its
@@ -263,6 +287,37 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
                 "type", "op",
                 "op", result.getTransformedOp(),
                 "version", result.getNewVersion())), null);
+    }
+
+    /** The op can never apply: the client drops it and rebases onto the server copy. */
+    private void rejectOp(WebSocketSession session, String sessionId) {
+        sendJson(session, Map.of("type", "nack", "reason", "invalid"));
+        sendResync(session, sessionId, true);
+    }
+
+    private boolean chargeCursorBudget(WebSocketSession session) {
+        TokenBucket bucket = (TokenBucket) session.getAttributes().get(ATTR_CURSOR_BUCKET);
+        if (bucket == null || bucket.tryAcquire()) return true;
+        rateLimitDrops.increment();
+        return false;
+    }
+
+    /** A reconnecting (or gap-detecting) client replays the ops it missed through its
+     *  normal OT loop, so its unacked edits are transformed, not replayed stale. Falls
+     *  back to a forced resync if that history is gone. */
+    private void handleCatchup(WebSocketSession session, String sessionId, JsonNode node) {
+        int from = node.path("from").asInt(-1);
+        List<OTService.CommittedOp> missed = otService.opsSince(sessionId, from);
+        if (missed == null) {
+            sendResync(session, sessionId, true);
+            return;
+        }
+        int version = from;
+        for (OTService.CommittedOp co : missed) {
+            sendJson(session, Map.of("type", "op", "op", co.getOp(), "version", co.getVersion()));
+            version = co.getVersion();
+        }
+        sendJson(session, Map.of("type", "caughtUp", "version", version));
     }
 
     /** A caught-up client that detected drift asks for the authoritative document. */
@@ -373,17 +428,20 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         if (targetClientId == null) return;
         Map<String, WebSocketSession> room = roomClients.get(sessionId);
         if (room == null) return;
+        String token = null;
         for (WebSocketSession s : room.values()) {
-            if (targetClientId.equals(attr(s, ATTR_CLIENT_ID))) {
-                String token = attr(s, ATTR_TOKEN);
-                if (token != null && token.equals(adminToken)) continue; // don't let admin kick self
-                sessionService.revoke(sessionId, token);
+            if (targetClientId.equals(attr(s, ATTR_CLIENT_ID))) { token = attr(s, ATTR_TOKEN); break; }
+        }
+        if (token == null || token.equals(adminToken)) return; // unknown, or admin kicking self
+        sessionService.revoke(sessionId, token);
+        // Every socket on that token (other tabs, a raw second socket) goes, not just one.
+        for (WebSocketSession s : room.values()) {
+            if (token.equals(attr(s, ATTR_TOKEN))) {
                 sendJson(s, Map.of("type", "kicked"));
                 closeQuietly(s, CloseStatus.POLICY_VIOLATION);
-                log.info("Session {}: kicked {}", sessionId, targetClientId);
-                break;
             }
         }
+        log.info("Session {}: kicked {}", sessionId, targetClientId);
     }
 
     /** Destructive-action guard: ending a room persists and frees RAM only. The
@@ -516,6 +574,25 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         sendToToken(sessionId, token, json(Map.of("type", "adminOffer")));
         offerTimer.schedule(() -> lapseAdminOffer(sessionId, token),
                 sessionService.adminOfferTimeoutMs(), TimeUnit.MILLISECONDS);
+    }
+
+    /** Everyone declined: try a fresh round later rather than leave the room host-less
+     *  for good. A no-op if the seat was filled or the room emptied meanwhile. */
+    private void scheduleReoffer(String sessionId) {
+        offerTimer.schedule(() -> offerAdmin(sessionId, sessionService.reofferVacantSeat(sessionId)),
+                sessionService.adminOfferTimeoutMs(), TimeUnit.MILLISECONDS);
+    }
+
+    private boolean clientIdTakenByOtherToken(String sessionId, String clientId, String token) {
+        if (clientId == null) return false;
+        for (Map<String, Map<String, WebSocketSession>> group : List.of(roomClients, pendingSockets)) {
+            Map<String, WebSocketSession> room = group.get(sessionId);
+            if (room == null) continue;
+            for (WebSocketSession s : room.values()) {
+                if (clientId.equals(attr(s, ATTR_CLIENT_ID)) && !Objects.equals(token, attr(s, ATTR_TOKEN))) return true;
+            }
+        }
+        return false;
     }
 
     private void lapseAdminOffer(String sessionId, String token) {
