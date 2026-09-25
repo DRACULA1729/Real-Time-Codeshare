@@ -51,6 +51,10 @@ public class WsHandshakeInterceptor implements HandshakeInterceptor {
             response.setStatusCode(HttpStatus.NOT_FOUND);
             return false;
         }
+        if (sessionService.isEnded(sessionId)) {
+            response.setStatusCode(HttpStatus.GONE);
+            return false;
+        }
 
         // Redeem the single-use connection ticket; reject if missing/expired/consumed
         // or bound to a different room.

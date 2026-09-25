@@ -27,6 +27,21 @@ class OTServiceValidationTest {
     }
 
     @Test
+    void noOpsAndCarriageReturns_rejected() {
+        assertRejected(op("a", "insert", 0, 0, "", null));
+        assertRejected(op("a", "delete", 0, 0, null, 0));
+        assertRejected(op("a", "insert", 0, 0, "a\r\nb", null));
+    }
+
+    @Test
+    void baseVersionAheadOfTheDocument_rejected() {
+        OTService svc = new OTService(new com.collabcode.realtime_codeshare.persistence.InMemoryDocumentRepository());
+        svc.applyOp("room", op("a", "insert", 0, 0, "x", null));
+        assertThrows(InvalidOpException.class, () -> svc.applyOp("room", op("a", "insert", 5, 0, "y", null)));
+        assertEquals("x", svc.getDocument("room"));
+    }
+
+    @Test
     void nullClientId_rejected() {
         assertRejected(op(null, "insert", 0, 0, "x", null));
     }

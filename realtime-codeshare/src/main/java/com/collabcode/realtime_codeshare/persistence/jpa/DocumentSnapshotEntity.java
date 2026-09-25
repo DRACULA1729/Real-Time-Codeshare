@@ -28,22 +28,28 @@ public class DocumentSnapshotEntity {
     @Column(name = "file_name", length = 64)
     private String fileName;
 
+    // nullable: rows written before V3 have no language; NULL reads back as "" (auto-detect)
+    @Column(name = "language", length = 32)
+    private String language;
+
     @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
     protected DocumentSnapshotEntity() {} // for JPA
 
-    public DocumentSnapshotEntity(String sessionId, String text, int version, String fileName) {
+    public DocumentSnapshotEntity(String sessionId, String text, int version, String fileName, String language) {
         this.sessionId = sessionId;
         this.text = text == null ? "" : text;
         this.version = version;
         this.fileName = fileName;
+        this.language = language;
     }
 
     public String getSessionId() { return sessionId; }
     public String getText() { return text; }
     public int getVersion() { return version; }
     public String getFileName() { return fileName; }
+    public String getLanguage() { return language; }
     public Instant getUpdatedAt() { return updatedAt; }
 }

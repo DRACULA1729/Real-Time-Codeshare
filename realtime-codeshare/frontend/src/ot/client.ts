@@ -41,6 +41,19 @@ export class OtClient {
     return ops;
   }
 
+  /** Send the in-flight op again from the current base (after a nack, or once a
+   *  reconnect has caught up). Remote ops seen since were already folded into it. */
+  resendOutstanding(): void {
+    if (this.outstanding === null) return;
+    this.outstanding = { ...this.outstanding, baseVersion: this.baseVersion };
+    this.send(this.outstanding);
+  }
+
+  /** The server can never apply the in-flight op; forget it (a forced resync follows). */
+  discardOutstanding(): void {
+    this.outstanding = null;
+  }
+
   /** A local edit produced by the editor. Sent immediately if nothing is in
    *  flight, otherwise queued. */
   submitLocal(op: Op): void {

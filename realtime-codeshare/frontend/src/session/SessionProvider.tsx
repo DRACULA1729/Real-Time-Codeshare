@@ -17,10 +17,13 @@ export interface SessionController {
   reject: (joinKey: string) => void;
   kick: (clientId: string) => void;
   endSession: () => void;
+  acceptAdmin: () => void;
+  declineAdmin: () => void;
   localInsert: (pos: number, text: string) => void;
   localDelete: (pos: number, length: number) => void;
   sendCursor: (pos: number) => void;
   rename: (baseName: string) => void;
+  setLanguage: (language: string) => void;
   setDocHost: (host: DocHost | null) => void;
   getDocument: () => string;
   inviteLink: () => string;
@@ -42,12 +45,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // Stable handler set that pushes connection events into the store / cursor bus.
   const handlers = useMemo<SessionHandlers>(
     () => ({
-      onInit: ({ document, version, role, token, fileName }) => {
+      onInit: ({ document, version, role, token, fileName, language }) => {
         const s = store.getState();
         if (s.sessionId) storeProfile(s.sessionId, token, s.name, s.color);
-        s.applyInit({ document, version, role, token, fileName });
+        s.applyInit({ document, version, role, token, fileName, languageChoice: language });
       },
       onRename: (fileName) => store.getState().setFileName(fileName),
+      onLanguage: (language) => store.getState().setLanguageChoice(language),
       onResyncDoc: (_document, version) => store.getState().setVersion(version),
       onPresence: (users) => store.getState().setPresence(users),
       onCursor: (clientId, pos) => cursors.push(clientId, pos),
@@ -65,11 +69,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       onSessionEnded: () => store.getState().setDenied("The host ended this session."),
       onAdminChanged: (clientId) => {
         if (connRef.current && clientId === connRef.current.clientId) store.getState().setRole("CREATOR");
+        store.getState().setAdminOffer(false); // seat taken (by us or anyone): the offer is moot
       },
+      onAdminOffer: (open) => store.getState().setAdminOffer(open),
       onUnavailable: () => {
         const s = store.getState();
         if (s.phase !== "denied") s.setDenied("This session was not found or is no longer available.");
       },
+      onReconnecting: () => store.getState().setConnection("reconnecting"),
       onDisconnected: () => store.getState().setConnection("disconnected"),
     }),
     [cursors, store],
@@ -147,6 +154,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       reject: (joinKey) => connRef.current?.reject(joinKey),
       kick: (clientId) => connRef.current?.kick(clientId),
       endSession: () => connRef.current?.endSession(),
+      acceptAdmin: () => {
+        store.getState().setAdminOffer(false);
+        connRef.current?.acceptAdmin();
+      },
+      declineAdmin: () => {
+        store.getState().setAdminOffer(false);
+        connRef.current?.declineAdmin();
+      },
       localInsert: (pos, text) => connRef.current?.localInsert(pos, text),
       localDelete: (pos, length) => connRef.current?.localDelete(pos, length),
       sendCursor: (pos) => connRef.current?.sendCursor(pos),
@@ -156,6 +171,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // sanitized) value; concurrent renames converge last-write-wins.
         store.getState().setFileName(clean);
         connRef.current?.rename(clean);
+      },
+      setLanguage: (language) => {
+        // Optimistic like rename; the server echo carries the authoritative value.
+        store.getState().setLanguageChoice(language);
+        connRef.current?.setLanguage(language);
       },
       setDocHost: (host) => connRef.current?.setDocHost(host),
       getDocument: () => connRef.current?.getDocumentText() ?? "",

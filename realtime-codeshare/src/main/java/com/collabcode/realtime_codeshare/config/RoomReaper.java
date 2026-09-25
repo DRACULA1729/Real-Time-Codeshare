@@ -49,4 +49,9 @@ public class RoomReaper {
             log.info("Reaper reclaimed {} idle session(s): {}", reaped.size(), reaped);
         }
     }
+
+    @Scheduled(fixedDelayString = "${codeshare.persist.dirty-interval-ms:5000}")
+    public void persistDirty() {
+        otService.persistDirty();                              // bounds crash loss to ~one interval
+    }
 }

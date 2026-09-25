@@ -29,6 +29,7 @@ export function ActionsPopover({ onClose }: { onClose: () => void }) {
   const version = useSessionStore((s) => s.version);
   const ext = useSessionStore((s) => s.languageExt);
   const storedFileName = useSessionStore((s) => s.fileName);
+  const role = useSessionStore((s) => s.role);
 
   const [filename, setFilename] = useState(storedFileName || sessionId || "code");
   const [status, setStatus] = useState<GitHubStatus | "loading" | "error">("loading");
@@ -167,6 +168,24 @@ export function ActionsPopover({ onClose }: { onClose: () => void }) {
               labelCls={labelCls}
             />
           </section>
+
+          {role === "CREATOR" && (
+            <>
+              <div className="h-px w-full bg-border-subtle" />
+              <section>
+                <p className={labelCls}>Session</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm("End this session for everyone? People are disconnected and can't rejoin.")) session.endSession();
+                  }}
+                  className="w-full rounded-lg border border-danger/40 py-2.5 text-body-md font-semibold text-danger transition hover:bg-danger/10"
+                >
+                  End session for everyone
+                </button>
+              </section>
+            </>
+          )}
         </div>
       </div>
     </div>

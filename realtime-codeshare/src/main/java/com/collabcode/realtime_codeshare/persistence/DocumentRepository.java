@@ -15,8 +15,9 @@ import java.util.Optional;
  */
 public interface DocumentRepository {
 
-    /** Persist (overwrite) the latest snapshot for a room, including its base file name. */
-    void save(String sessionId, String text, int version, String name);
+    /** Persist (overwrite) the latest snapshot for a room, including its base file name
+     *  and chosen language ("" = auto-detect). */
+    void save(String sessionId, String text, int version, String name, String language);
 
     /** Load the last persisted snapshot, if any. */
     Optional<StoredDocument> load(String sessionId);

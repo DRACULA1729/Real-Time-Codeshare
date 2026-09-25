@@ -20,7 +20,7 @@ class DocumentStoreResyncTest {
     @Test
     void seedEstablishesTheFloorAtTheSnapshotVersion() {
         OTService.DocumentStore store = new OTService.DocumentStore();
-        store.seed("hello", 10, "");
+        store.seed("hello", 10, "", "");
 
         assertThat(store.getDocument()).isEqualTo("hello");
         assertThat(store.getVersion()).isEqualTo(10);

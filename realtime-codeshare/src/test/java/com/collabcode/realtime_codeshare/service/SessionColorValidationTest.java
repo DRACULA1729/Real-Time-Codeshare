@@ -12,7 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class SessionColorValidationTest {
 
-    private final SessionService service = new SessionService(3);
+    private final SessionService service = new SessionService(3, 30_000);
 
     private String pendingColor(String requested) {
         Session s = service.createSession("Host", "#7aa2f7");

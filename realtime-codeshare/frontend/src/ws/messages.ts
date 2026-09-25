@@ -18,6 +18,7 @@ export interface InitMsg {
   role: Role;
   clientId?: string;
   fileName?: string; // shared base name; optional to tolerate an older server
+  language?: string; // chosen language id, "" = auto-detect; optional for older servers
 }
 export interface OpMsg {
   type: "op";
@@ -66,15 +67,36 @@ export interface AdminChangedMsg {
   type: "adminChanged";
   clientId: string;
 }
+export interface AdminOfferMsg {
+  type: "adminOffer"; // the host left; this member may take over (promoted only on accept)
+}
+export interface AdminOfferWithdrawnMsg {
+  type: "adminOfferWithdrawn"; // offer lapsed to someone else, or the host came back
+}
 export interface KickedMsg {
   type: "kicked";
 }
 export interface SessionEndedMsg {
   type: "sessionEnded";
 }
+export interface PongMsg {
+  type: "pong"; // heartbeat reply
+}
+export interface NackMsg {
+  type: "nack"; // the server didn't commit our in-flight op
+  reason: "rate" | "invalid"; // rate: retry shortly; invalid: drop it (a forced resync follows)
+}
+export interface CaughtUpMsg {
+  type: "caughtUp"; // end of a catchup replay
+  version: number;
+}
 export interface RenameMsg {
   type: "rename";
   fileName: string; // server-sanitized base name, echoed to the sender too
+}
+export interface LanguageMsg {
+  type: "language";
+  language: string; // server-sanitized language id ("" = auto-detect), echoed to the sender too
 }
 
 export type WsInbound =
@@ -89,9 +111,15 @@ export type WsInbound =
   | JoinResolvedMsg
   | JoinDeniedMsg
   | AdminChangedMsg
+  | AdminOfferMsg
+  | AdminOfferWithdrawnMsg
   | KickedMsg
   | SessionEndedMsg
-  | RenameMsg;
+  | RenameMsg
+  | PongMsg
+  | NackMsg
+  | CaughtUpMsg
+  | LanguageMsg;
 
 // The server serializes Op via Jackson: `type` is the enum name ("INSERT" /
 // "DELETE"). Normalize to our lowercase wire model before transforming.
@@ -133,4 +161,9 @@ export type WsOutbound =
   | { type: "reject"; joinKey: string }
   | { type: "kick"; clientId: string }
   | { type: "endsession" }
-  | { type: "rename"; fileName: string };
+  | { type: "acceptAdmin" }
+  | { type: "declineAdmin" }
+  | { type: "rename"; fileName: string }
+  | { type: "setLanguage"; language: string }
+  | { type: "ping" }
+  | { type: "catchup"; from: number };

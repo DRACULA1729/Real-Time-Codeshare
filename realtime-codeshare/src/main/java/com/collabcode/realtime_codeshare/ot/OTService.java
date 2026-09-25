@@ -1,6 +1,7 @@
 package com.collabcode.realtime_codeshare.ot;
 
 import com.collabcode.realtime_codeshare.persistence.DocumentRepository;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -48,7 +49,7 @@ public class OTService {
             DocumentStore store = new DocumentStore();
             // Load-on-miss: a reconnect after the room emptied (or a restart with a
             // durable repository) rehydrates the real document instead of a blank one.
-            repository.load(k).ifPresent(snap -> store.seed(snap.text(), snap.version(), snap.name()));
+            repository.load(k).ifPresent(snap -> store.seed(snap.text(), snap.version(), snap.name(), snap.language()));
             return store;
         });
     }
@@ -67,14 +68,29 @@ public class OTService {
         DocumentStore store = sessions.get(sessionId);
         if (store == null) return;
         Snapshot snap = store.snapshot();
-        repository.save(sessionId, snap.document(), snap.version(), store.getName());
+        repository.save(sessionId, snap.document(), snap.version(), store.getName(), store.getLanguage());
+    }
+
+    /** Save only rooms changed since their last save — the short-interval write-through
+     *  that keeps the crash-loss window to a few seconds without per-op writes. */
+    public void persistDirty() {
+        sessions.forEach((id, store) -> {
+            Snapshot snap = store.takeDirtySnapshot();
+            if (snap == null) return;
+            try {
+                repository.save(id, snap.document(), snap.version(), store.getName(), store.getLanguage());
+            } catch (RuntimeException e) {
+                store.markDirty();                 // retry on the next sweep
+                log.warn("Dirty persist failed for session {}: {}", id, e.toString());
+            }
+        });
     }
 
     /** Snapshot every resident room — periodic backstop so a crash loses at most one interval. */
     public void persistAll() {
         sessions.forEach((id, store) -> {
             Snapshot snap = store.snapshot();
-            repository.save(id, snap.document(), snap.version(), store.getName());
+            repository.save(id, snap.document(), snap.version(), store.getName(), store.getLanguage());
         });
     }
 
@@ -92,13 +108,30 @@ public class OTService {
         return result;
     }
 
-    /** Drop a room's entire OT state, including its persisted snapshot. Called when
-     *  a room is ended by the admin or fully reaped after the idle TTL. */
+    /** Persist and drop a room's resident store but keep its durable snapshot (the
+     *  end-session guard): a rejoin rehydrates it, and only the idle reap's
+     *  {@link #evict} deletes it. Removed first so every committed op is in the save. */
+    public void unload(String sessionId) {
+        DocumentStore store = sessions.remove(sessionId);
+        if (store == null) return;
+        Snapshot snap = store.snapshot();
+        repository.save(sessionId, snap.document(), snap.version(), store.getName(), store.getLanguage());
+    }
+
+    /** Drop a room's entire OT state, including its persisted snapshot. Called only
+     *  when a room is fully reaped after the idle TTL. */
     public void evict(String sessionId) {
         if (sessions.remove(sessionId) != null) {
             log.info("Evicted document store for session {}", sessionId);
         }
         repository.delete(sessionId);
+    }
+
+    /** Committed ops after {@code fromVersion}, oldest first, so a reconnecting client
+     *  can replay what it missed through its normal OT loop. Null when that range is
+     *  no longer (or not yet) available — the caller falls back to a forced resync. */
+    public List<CommittedOp> opsSince(String sessionId, int fromVersion) {
+        return getOrCreateStore(sessionId).opsSince(fromVersion);
     }
 
     public String getDocument(String sessionId) {
@@ -116,6 +149,30 @@ public class OTService {
 
     public void setName(String sessionId, String name) {
         getOrCreateStore(sessionId).setName(name);
+    }
+
+    /** Language id chosen for the room's document ("" = each client auto-detects). */
+    public String getLanguage(String sessionId) {
+        return getOrCreateStore(sessionId).getLanguage();
+    }
+
+    public void setLanguage(String sessionId, String language) {
+        getOrCreateStore(sessionId).setLanguage(language);
+    }
+
+    /** Max length of a language id (matches the language VARCHAR(32) column). */
+    public static final int MAX_LANGUAGE_LEN = 32;
+
+    /**
+     * Normalize a client-chosen language id. The server doesn't know the client's
+     * language table, so it only enforces a safe shape: lowercase letters, digits and
+     * {@code + # -}, capped at {@value #MAX_LANGUAGE_LEN}. Anything else becomes ""
+     * (auto-detect).
+     */
+    public static String sanitizeLanguage(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim().toLowerCase(Locale.ROOT);
+        return s.length() <= MAX_LANGUAGE_LEN && s.matches("[a-z0-9+#-]*") ? s : "";
     }
 
     // ---------------- validation ----------------
@@ -149,13 +206,17 @@ public class OTService {
         switch (type) {
             case "insert" -> {
                 String text = dto.text == null ? "" : dto.text;
+                // No-op inserts would still bump the version (and push others past the
+                // compaction floor); CR would desync CodeMirror, which stores only LF.
+                if (text.isEmpty()) throw new InvalidOpException("insert text must not be empty");
+                if (text.indexOf('\r') >= 0) throw new InvalidOpException("insert text must use \\n line breaks, not \\r");
                 if (text.length() > MAX_OP_LEN)
                     throw new InvalidOpException("insert text exceeds " + MAX_OP_LEN + " chars");
                 return new InsertOp(dto.clientId, dto.baseVersion, dto.pos, text);
             }
             case "delete" -> {
                 int length = dto.length == null ? 0 : dto.length;
-                if (length < 0) throw new InvalidOpException("delete length must be >= 0");
+                if (length <= 0) throw new InvalidOpException("delete length must be > 0");
                 if (length > MAX_OP_LEN)
                     throw new InvalidOpException("delete length exceeds " + MAX_OP_LEN);
                 return new DeleteOp(dto.clientId, dto.baseVersion, dto.pos, length);
@@ -346,6 +407,10 @@ public class OTService {
         private int compactedThroughVersion = 0;
         /** Shared base file name; display metadata, last-write-wins across clients. */
         private String name = "";
+        /** Changed since the last {@link #takeDirtySnapshot()}. */
+        private boolean dirty = false;
+        /** Chosen language id ("" = auto-detect); last-write-wins like the name. */
+        private String language = "";
 
         public synchronized int getVersion() { return version.get(); }
 
@@ -355,17 +420,31 @@ public class OTService {
 
         public synchronized String getName() { return name; }
 
-        public synchronized void setName(String name) { this.name = name == null ? "" : name; }
+        public synchronized void setName(String name) { this.name = name == null ? "" : name; dirty = true; }
+
+        public synchronized void markDirty() { dirty = true; }
+
+        /** Snapshot and clear the dirty flag atomically, or null if nothing changed. */
+        public synchronized Snapshot takeDirtySnapshot() {
+            if (!dirty) return null;
+            dirty = false;
+            return snapshot();
+        }
+
+        public synchronized String getLanguage() { return language; }
+
+        public synchronized void setLanguage(String language) { this.language = language == null ? "" : language; dirty = true; }
 
         /** Rehydrate a fresh store from a persisted snapshot. History starts empty,
          *  so any op based before this version is treated as below the floor. */
-        public synchronized void seed(String text, int atVersion, String name) {
+        public synchronized void seed(String text, int atVersion, String name, String language) {
             doc.setLength(0);
             doc.append(text == null ? "" : text);
             version.set(atVersion);
             history.clear();
             compactedThroughVersion = atVersion;
             this.name = name == null ? "" : name;
+            this.language = language == null ? "" : language;
         }
 
         /**
@@ -379,6 +458,10 @@ public class OTService {
          */
         public synchronized ApplyResult commit(Op incoming) {
             int base = incoming.getBaseVersion();
+            if (base > version.get()) {
+                // A client can't have built on a version that doesn't exist yet.
+                throw new InvalidOpException("baseVersion " + base + " is ahead of the document (v" + version.get() + ")");
+            }
             if (base < compactedThroughVersion) {
                 throw new ResyncRequiredException(
                         "baseVersion " + base + " below compaction floor " + compactedThroughVersion);
@@ -400,6 +483,7 @@ public class OTService {
             }
 
             int newVersion = version.incrementAndGet();
+            dirty = true;
             history.add(new CommittedOp(transformed.copy(), newVersion));
 
             if (history.size() > MAX_HISTORY) {
@@ -408,6 +492,15 @@ public class OTService {
                 compactBelow(newVersion - MAX_HISTORY);
             }
             return new ApplyResult(newVersion, transformed);
+        }
+
+        /** Ops committed after {@code from}, or null if {@code from} is below the
+         *  compaction floor (history gone) or ahead of the current version. */
+        public synchronized List<CommittedOp> opsSince(int from) {
+            if (from < compactedThroughVersion || from > version.get()) return null;
+            List<CommittedOp> out = new ArrayList<>();
+            for (CommittedOp co : history) if (co.version > from) out.add(co);
+            return out;
         }
 
         /** Atomic (document, version, SHA-256 digest) snapshot for re-sync. The
@@ -444,6 +537,7 @@ public class OTService {
         }
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true) // an extra field must not silently drop an edit
     public static class OpDTO {
         public String clientId;
         public String type;

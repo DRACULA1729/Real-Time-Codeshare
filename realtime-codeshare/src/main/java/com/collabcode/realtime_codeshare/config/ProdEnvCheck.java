@@ -6,6 +6,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -25,11 +27,14 @@ public class ProdEnvCheck implements InitializingBean {
 
     private final String allowedOrigins;
     private final GitHubProperties github;
+    private final Environment environment;
 
     public ProdEnvCheck(@Value("${codeshare.allowed-origins:}") String allowedOrigins,
-                        GitHubProperties github) {
+                        GitHubProperties github,
+                        Environment environment) {
         this.allowedOrigins = allowedOrigins == null ? "" : allowedOrigins.trim();
         this.github = github;
+        this.environment = environment;
     }
 
     @Override
@@ -42,6 +47,13 @@ public class ProdEnvCheck implements InitializingBean {
             errors.add("CODESHARE_ALLOWED_ORIGINS must not contain localhost/127.0.0.1 in prod: " + allowedOrigins);
         } else if (allowedOrigins.contains("*")) {
             log.warn("CODESHARE_ALLOWED_ORIGINS contains a wildcard ({}); prefer exact origins in prod", allowedOrigins);
+        }
+
+        // Only postgres survives a restart: the default in-memory repo and bare redis
+        // (non-durable cache) would silently lose every document on redeploy.
+        if (!environment.acceptsProfiles(Profiles.of("postgres"))) {
+            errors.add("prod requires the 'postgres' profile for restart-durable documents "
+                    + "(e.g. SPRING_PROFILES_ACTIVE=prod,postgres with DB_URL/DB_USER/DB_PASSWORD)");
         }
 
         if (github.isConfigured()) {

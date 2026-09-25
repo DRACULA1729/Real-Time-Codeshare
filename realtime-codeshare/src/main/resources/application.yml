@@ -33,10 +33,13 @@ codeshare:
     max-rejected-attempts: 3    # rejected joins per identity before a temporary block
     ttl-minutes: 30
     max-active: 10000           # global cap on live sessions (memory-DoS guard)
+    admin-offer-timeout-ms: 30000  # host left: time a member has to accept admin before it moves on
   room:
     idle-ttl-ms: 1800000        # reclaim empty rooms idle longer than 30 min
   reaper:
     interval-ms: 60000          # idle-room sweep cadence
+  persist:
+    dirty-interval-ms: 5000     # write-through cadence for edited rooms (crash-loss window)
   rate:
     ops-per-sec: 50             # per-connection op rate limit
     cursors-per-sec: 30         # per-connection cursor rate limit (anti-amplification)

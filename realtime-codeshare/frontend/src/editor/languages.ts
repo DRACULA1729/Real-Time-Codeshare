@@ -8,6 +8,9 @@ import { css } from "@codemirror/lang-css";
 import { html } from "@codemirror/lang-html";
 import { json } from "@codemirror/lang-json";
 import { sql } from "@codemirror/lang-sql";
+import { tantuHljs, tantuLanguage } from "./tantu";
+
+hljs.registerLanguage("tantu", tantuHljs);
 
 export interface DetectedLanguage {
   /** highlight.js id, also shown (uppercased) in the presence-strip chip. */
@@ -44,25 +47,41 @@ const TABLE: Record<string, Entry> = {
   html: { label: "HTML", ext: "html", make: () => html() },
   json: { label: "JSON", ext: "json", make: () => json() },
   sql: { label: "SQL", ext: "sql", make: () => sql() },
+  tantu: { label: "Tantu", ext: "tn", make: () => tantuLanguage },
 };
 
 const PLAIN: DetectedLanguage = { id: "plaintext", label: "Plain Text", ext: "txt", extension: [] };
 
 const SUBSET = Object.keys(TABLE).filter((k) => k !== "tsx" && k !== "jsx");
 
+/** Choices for the language picker, alphabetical. */
+export const LANGUAGE_OPTIONS = Object.entries(TABLE)
+  .map(([id, e]) => ({ id, label: e.label }))
+  .sort((a, b) => a.label.localeCompare(b.label));
+
+/** Language for a known id; an id this build doesn't know shows as plain text. */
+export function languageFor(id: string): DetectedLanguage {
+  const entry = TABLE[id];
+  if (!entry) return { id, label: id, ext: "txt", extension: [] };
+  return { id, label: entry.label, ext: entry.ext, extension: entry.make() };
+}
+
+// highlightAuto runs every grammar over the text and is super-linear on long
+// unbroken runs (70k chars of one token took ~60s, on every client, after every
+// edit). The head of a file identifies its language; 2,000 chars stays ~50ms worst case.
+const DETECT_SAMPLE = 2000;
+
 /** Auto-detect the language of `code` (mirrors the legacy hljs.highlightAuto). */
 export function detectLanguage(code: string): DetectedLanguage {
   if (!code.trim()) return PLAIN;
   let id: string | undefined;
   try {
-    id = hljs.highlightAuto(code, SUBSET).language;
+    id = hljs.highlightAuto(code.slice(0, DETECT_SAMPLE), SUBSET).language;
   } catch {
     id = undefined;
   }
   if (!id) return PLAIN;
-  const entry = TABLE[id];
-  if (!entry) return { id, label: id, ext: "txt", extension: [] };
-  return { id, label: entry.label, ext: entry.ext, extension: entry.make() };
+  return languageFor(id);
 }
 
 /** xml grammar also covers HTML; this returns a stable extension for the id. */

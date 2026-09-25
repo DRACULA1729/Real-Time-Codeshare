@@ -45,7 +45,8 @@ The build normally downloads Node at `generate-resources`. To build the JAR from
 ```bash
 docker build -t realtime-codeshare:latest .      # multi-stage: build -> slim JRE, non-root
 docker run -p 8080:8080 \
-  -e SPRING_PROFILES_ACTIVE=prod \
+  -e SPRING_PROFILES_ACTIVE=prod,postgres \
+  -e DB_URL='jdbc:postgresql://<host>/<db>?sslmode=require' -e DB_USER=... -e DB_PASSWORD=... \
   -e CODESHARE_ALLOWED_ORIGINS=https://codeshare.example.com \
   realtime-codeshare:latest
 ```
@@ -58,7 +59,11 @@ docker run -p 8080:8080 \
 | `dev` | local dev | adds Vite `:5173` + ngrok wildcard origins; DEBUG logging |
 | `prod` | internet-exposed | Secure cookies; origins from env (no localhost); actuator on a separate port; **fails fast** if required config is missing |
 
-Activate with `--spring.profiles.active=prod` or `SPRING_PROFILES_ACTIVE=prod`.
+Activate with `--spring.profiles.active=prod,postgres` or `SPRING_PROFILES_ACTIVE=prod,postgres`.
+
+**Durability:** only the `postgres` profile keeps documents across a restart. The default
+profile holds them in memory (logs a startup WARN) and `redis` alone is a non-durable
+cache, so `prod` refuses to start without `postgres`.
 
 ## Required environment (prod)
 
@@ -66,6 +71,7 @@ The `prod` profile refuses to start (clear message) if these are missing/wrong:
 
 | Variable | Required | Purpose |
 |---|---|---|
+| `postgres` profile + `DB_URL` / `DB_USER` / `DB_PASSWORD` | **yes** | Restart-durable document store |
 | `CODESHARE_ALLOWED_ORIGINS` | **yes** | Exact WS-upgrade origin(s), comma-separated. Must not be localhost. |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | only if GitHub push is enabled | OAuth app credentials |
 | `GITHUB_REDIRECT_URI` | if GitHub configured | Public **https** callback (not localhost) |
@@ -103,11 +109,12 @@ rate-limits on the real socket IP.
   `Referrer-Policy: no-referrer`, HSTS over HTTPS.
 - **Rate limits** — per-IP session creation + global session cap (memory-DoS guard);
   per-connection op and cursor token buckets; inbound frame-size cap.
-- **GitHub token** stays server-side (never sent to the browser), with a sliding TTL.
+- **GitHub token** stays server-side (never sent to the browser), with a sliding TTL;
+  disconnect also revokes it at GitHub (best-effort, async).
 
 ## Known follow-ups (not launch-blocking)
 
-- Best-effort GitHub token revocation at the provider on disconnect (today the
-  server-side token is dropped and TTL-expired, not revoked at GitHub).
+- GitHub tokens that TTL-expire (no explicit disconnect) are dropped locally but not
+  revoked at GitHub.
 - Horizontal scale (Redis + Postgres, async broadcast, snapshot compaction) — the
   abstractions are in place; the implementations land in the scale phase.

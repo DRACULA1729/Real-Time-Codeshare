@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
 import { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, keymap } from "@codemirror/view";
-import { EditorState, Compartment, Annotation, type ChangeSet } from "@codemirror/state";
+import { EditorState, Compartment, Annotation, Transaction, type ChangeSet } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { editorBaseTheme, highlightFor } from "../../editor/theme";
 import { remoteCursorsExtension, setRemoteCursor } from "../../editor/remoteCursors";
-import { detectLanguage } from "../../editor/languages";
+import { detectLanguage, languageFor } from "../../editor/languages";
 import { useSession } from "../../session/SessionProvider";
 import { useSessionStore } from "../../state/store";
 import { useTheme } from "../../theme/ThemeProvider";
@@ -13,6 +13,9 @@ import type { Op } from "../../ot/ops";
 // Marks transactions whose changes came from a remote op, so the update listener
 // doesn't echo them back to the server as local edits.
 const REMOTE = Annotation.define<boolean>();
+// Other people's edits (and resyncs) stay out of undo history, so Ctrl+Z only ever
+// reverts your own changes instead of broadcasting the removal of someone else's.
+const NOT_UNDOABLE = Transaction.addToHistory.of(false);
 const CURSOR_THROTTLE_MS = 70;
 const DETECT_DEBOUNCE_MS = 600;
 
@@ -20,9 +23,11 @@ export function EditorPane() {
   const host = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const syntaxCompartment = useRef<Compartment | null>(null);
+  const applyLanguage = useRef<() => void>(() => {});
   const session = useSession();
   const { theme } = useTheme();
   const initialDocument = useSessionStore((s) => s.initialDocument);
+  const languageChoice = useSessionStore((s) => s.languageChoice);
 
   // Build the editor once, on admission.
   useEffect(() => {
@@ -40,16 +45,21 @@ export function EditorPane() {
       }, CURSOR_THROTTLE_MS);
     };
 
+    // A picked language wins; otherwise detect from the content.
+    applyLanguage.current = () => {
+      const view = viewRef.current;
+      if (!view) return;
+      const choice = useSessionStore.getState().languageChoice;
+      const lang = choice ? languageFor(choice) : detectLanguage(view.state.doc.toString());
+      useSessionStore.getState().setLanguage(lang.label, lang.ext);
+      view.dispatch({ effects: language.reconfigure(lang.extension) });
+    };
+
     let detectTimer: ReturnType<typeof setTimeout> | 0 = 0;
     const scheduleDetect = () => {
+      if (useSessionStore.getState().languageChoice) return; // locked; nothing to detect
       if (detectTimer) clearTimeout(detectTimer);
-      detectTimer = setTimeout(() => {
-        const view = viewRef.current;
-        if (!view) return;
-        const detected = detectLanguage(view.state.doc.toString());
-        useSessionStore.getState().setLanguage(detected.label, detected.ext);
-        view.dispatch({ effects: language.reconfigure(detected.extension) });
-      }, DETECT_DEBOUNCE_MS);
+      detectTimer = setTimeout(() => applyLanguage.current(), DETECT_DEBOUNCE_MS);
     };
 
     const emitChanges = (changes: ChangeSet) => {
@@ -110,23 +120,20 @@ export function EditorPane() {
       applyRemote: (op: Op) => {
         if (op.type === "insert") {
           const from = clamp(op.pos);
-          view.dispatch({ changes: { from, insert: op.text }, annotations: REMOTE.of(true) });
+          view.dispatch({ changes: { from, insert: op.text }, annotations: [REMOTE.of(true), NOT_UNDOABLE] });
         } else {
           const from = clamp(op.pos);
           const to = clamp(op.pos + op.length);
-          if (to > from) view.dispatch({ changes: { from, to }, annotations: REMOTE.of(true) });
+          if (to > from) view.dispatch({ changes: { from, to }, annotations: [REMOTE.of(true), NOT_UNDOABLE] });
         }
       },
       replaceText: (text: string) => {
         view.dispatch({
           changes: { from: 0, to: view.state.doc.length, insert: text },
-          annotations: REMOTE.of(true),
+          annotations: [REMOTE.of(true), NOT_UNDOABLE],
         });
       },
     });
-
-    // Seed language detection + cursor broadcast from the initial document.
-    scheduleDetect();
 
     return () => {
       session.setDocHost(null);
@@ -138,6 +145,9 @@ export function EditorPane() {
     // Build once; initialDocument is fixed at admission. Theme handled below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Seed on mount, and re-apply when anyone picks a language (or goes back to auto-detect).
+  useEffect(() => applyLanguage.current(), [languageChoice]);
 
   // Swap syntax highlighting when the app theme toggles.
   useEffect(() => {
