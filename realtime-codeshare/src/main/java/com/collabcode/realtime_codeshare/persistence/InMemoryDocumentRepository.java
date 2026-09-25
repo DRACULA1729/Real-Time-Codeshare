@@ -1,5 +1,6 @@
 package com.collabcode.realtime_codeshare.persistence;
 
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -18,6 +19,12 @@ import java.util.concurrent.ConcurrentHashMap;
 public class InMemoryDocumentRepository implements DocumentRepository {
 
     private final Map<String, StoredDocument> docs = new ConcurrentHashMap<>();
+
+    public InMemoryDocumentRepository() {
+        LoggerFactory.getLogger(InMemoryDocumentRepository.class).warn(
+                "Documents are held in memory only and will be LOST on restart. "
+                + "Activate the 'postgres' profile for restart durability.");
+    }
 
     @Override
     public void save(String sessionId, String text, int version, String name) {

@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestClient;
@@ -18,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Hand-rolled GitHub OAuth2 authorization-code flow (no Spring Security). The
@@ -99,8 +101,32 @@ public class GitHubOAuthController {
     @PostMapping("/disconnect")
     public Map<String, Object> disconnect(HttpServletRequest req) {
         HttpSession session = req.getSession(false);
-        if (session != null) tokenStore.remove(session.getId());
+        if (session != null) {
+            String token = tokenStore.get(session.getId());
+            tokenStore.remove(session.getId());
+            if (token != null) revokeAsync(token);
+        }
         return Map.of("authorized", false);
+    }
+
+    /** Best-effort revocation at GitHub, off the request thread so it never delays
+     *  the user's disconnect. The token is already gone locally either way. */
+    private void revokeAsync(String token) {
+        if (!props.isConfigured()) return;
+        CompletableFuture.runAsync(() -> {
+            try {
+                restClient.method(HttpMethod.DELETE)
+                        .uri(props.getApiBase() + "/applications/{clientId}/token", props.getClientId())
+                        .headers(h -> h.setBasicAuth(props.getClientId(), props.getClientSecret()))
+                        .header("Accept", "application/vnd.github+json")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(Map.of("access_token", token))
+                        .retrieve()
+                        .toBodilessEntity();
+            } catch (RuntimeException e) {
+                log.warn("GitHub token revocation failed (token already dropped locally): {}", e.getMessage());
+            }
+        });
     }
 
     private String exchangeCodeForToken(String code) {

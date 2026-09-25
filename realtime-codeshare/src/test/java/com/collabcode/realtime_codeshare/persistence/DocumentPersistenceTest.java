@@ -44,6 +44,32 @@ class DocumentPersistenceTest {
     }
 
     @Test
+    void persistDirtySavesOnlyChangedRoomsOnce() {
+        java.util.List<String> saves = new java.util.ArrayList<>();
+        DocumentRepository repo = new InMemoryDocumentRepository() {
+            @Override
+            public void save(String sessionId, String text, int version, String name) {
+                saves.add(sessionId + ":" + text);
+                super.save(sessionId, text, version, name);
+            }
+        };
+        OTService ot = new OTService(repo);
+
+        ot.applyOp("S", insert(0, "hi"));
+        ot.getOrCreateStore("IDLE");                     // resident but never edited
+        ot.persistDirty();
+        assertThat(saves).containsExactly("S:hi");
+
+        ot.persistDirty();                               // nothing changed since
+        assertThat(saves).hasSize(1);
+
+        ot.setName("S", "renamed");                      // a rename alone is a change
+        ot.persistDirty();
+        assertThat(saves).hasSize(2);
+        assertThat(repo.load("S")).get().extracting(StoredDocument::name).isEqualTo("renamed");
+    }
+
+    @Test
     void evictRemovesBothResidentStoreAndDurableSnapshot() {
         DocumentRepository repo = new InMemoryDocumentRepository();
         OTService ot = new OTService(repo);

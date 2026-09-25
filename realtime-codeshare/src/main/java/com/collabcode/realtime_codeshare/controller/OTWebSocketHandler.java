@@ -28,13 +28,17 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Meet-style gateway over the OT engine. The handshake interceptor has already
  * validated the session id; this handler enforces admission (creator/approved
  * tokens edit immediately, new joiners wait in a room for host approval),
  * relays ops/cursors only for admitted clients, services admin actions, and
- * transfers admin when the host leaves.
+ * offers the admin seat to the next member when the host leaves (promoted only
+ * on accept).
  */
 @Component
 public class OTWebSocketHandler extends TextWebSocketHandler {
@@ -85,6 +89,13 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
                 t.setDaemon(true);
                 return t;
             });
+
+    // Fires admin-offer lapses; each check is a no-op if the offer was already answered.
+    private final ScheduledExecutorService offerTimer = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "admin-offer-timer");
+        t.setDaemon(true);
+        return t;
+    });
 
     public OTWebSocketHandler(OTService otService,
                               SessionService sessionService,
@@ -154,7 +165,8 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         String token = attr(session, ATTR_TOKEN);
         session.getAttributes().put(ATTR_ADMITTED, true);
         roomClients.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>()).put(session.getId(), session);
-        sessionService.markActive(sessionId, token);
+        String withdrawn = sessionService.markActive(sessionId, token);
+        if (withdrawn != null) sendToToken(sessionId, withdrawn, json(Map.of("type", "adminOfferWithdrawn")));
         touch(sessionId);
 
         sendJson(session, Map.of(
@@ -189,6 +201,9 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         String token = attr(session, ATTR_TOKEN);
 
         switch (type) {
+            // App-level heartbeat: keeps proxies from idling the socket out and lets the
+            // client spot a half-open connection. Answered for waiting sockets too.
+            case "ping" -> sendJson(session, Map.of("type", "pong"));
             case "insert", "delete" -> { if (requireAdmitted(session, sessionId)) handleOp(session, sessionId, node); }
             case "cursor" -> { if (requireAdmitted(session, sessionId)) handleCursor(session, sessionId, node); }
             case "resync" -> { if (requireAdmitted(session, sessionId)) handleResync(session, sessionId); }
@@ -197,6 +212,14 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             case "reject" -> { if (requireAdmin(sessionId, token)) handleReject(sessionId, token, node); }
             case "kick" -> { if (requireAdmin(sessionId, token)) handleKick(sessionId, token, node); }
             case "endsession" -> { if (requireAdmin(sessionId, token)) endSession(sessionId); }
+            case "acceptadmin" -> {
+                if (requireAdmitted(session, sessionId) && sessionService.acceptAdmin(sessionId, token)) {
+                    announceAdmin(sessionId, token);
+                }
+            }
+            case "declineadmin" -> {
+                if (requireAdmitted(session, sessionId)) offerAdmin(sessionId, sessionService.declineAdmin(sessionId, token));
+            }
             default -> log.warn("[{}] ignoring message of unknown type '{}'", sessionId, type);
         }
     }
@@ -342,14 +365,18 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    /** Destructive-action guard: ending a room persists and frees RAM only. The
+     *  durable snapshot and the session's access list survive until the normal idle
+     *  reap deletes both, so an (auto-transferred) admin can't purge the document and
+     *  approved members can still reopen it within that window. */
     private void endSession(String sessionId) {
         log.info("Session {}: ended by admin", sessionId);
         closeAll(roomClients.remove(sessionId), "sessionEnded");
         closeAll(pendingSockets.remove(sessionId), "sessionEnded");
         cursorPositions.remove(sessionId);
         lastActivity.remove(sessionId);
-        otService.evict(sessionId);
-        sessionService.evict(sessionId);
+        otService.unload(sessionId);
+        sessionService.disconnectAll(sessionId);
     }
 
     // ---------------- lifecycle ----------------
@@ -371,8 +398,10 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
                     if (cursors != null) cursors.remove(clientId);
                     broadcast(sessionId, json(Map.of("type", "cursorRemove", "clientId", clientId)), session.getId());
                 }
-                String newAdmin = sessionService.markInactive(sessionId, token);
-                if (newAdmin != null) announceAdmin(sessionId, newAdmin);
+                // A reconnect can land before the old socket's close: only a token's
+                // last socket leaving counts as a departure (else a live host looks gone).
+                boolean stillConnected = room.values().stream().anyMatch(s -> token.equals(attr(s, ATTR_TOKEN)));
+                if (!stillConnected) offerAdmin(sessionId, sessionService.markInactive(sessionId, token));
                 if (room.isEmpty()) {
                     onRoomEmpty(sessionId);
                 } else {
@@ -458,6 +487,30 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         broadcast(sessionId, json(Map.of("type", "adminChanged", "clientId", nullSafe(adminClientId))), null);
         broadcastPresence(sessionId);
         if (adminSocket != null) sendPendingListTo(adminSocket, sessionId);
+    }
+
+    /** Ask a member to take the vacated admin seat and arm the lapse timer. */
+    private void offerAdmin(String sessionId, String token) {
+        if (token == null) return;
+        sendToToken(sessionId, token, json(Map.of("type", "adminOffer")));
+        offerTimer.schedule(() -> lapseAdminOffer(sessionId, token),
+                sessionService.adminOfferTimeoutMs(), TimeUnit.MILLISECONDS);
+    }
+
+    private void lapseAdminOffer(String sessionId, String token) {
+        String next = sessionService.lapseAdminOffer(sessionId, token, System.currentTimeMillis());
+        if (next == null) return;
+        if (!next.equals(token)) sendToToken(sessionId, token, json(Map.of("type", "adminOfferWithdrawn")));
+        offerAdmin(sessionId, next);
+    }
+
+    private void sendToToken(String sessionId, String token, String json) {
+        Map<String, WebSocketSession> room = roomClients.get(sessionId);
+        if (room == null) return;
+        TextMessage msg = new TextMessage(json);
+        for (WebSocketSession s : room.values()) {
+            if (token.equals(attr(s, ATTR_TOKEN)) && s.isOpen()) trySend(s, msg, sessionId);
+        }
     }
 
     private void sendPendingListTo(WebSocketSession session, String sessionId) {

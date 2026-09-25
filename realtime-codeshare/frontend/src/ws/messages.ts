@@ -66,11 +66,20 @@ export interface AdminChangedMsg {
   type: "adminChanged";
   clientId: string;
 }
+export interface AdminOfferMsg {
+  type: "adminOffer"; // the host left; this member may take over (promoted only on accept)
+}
+export interface AdminOfferWithdrawnMsg {
+  type: "adminOfferWithdrawn"; // offer lapsed to someone else, or the host came back
+}
 export interface KickedMsg {
   type: "kicked";
 }
 export interface SessionEndedMsg {
   type: "sessionEnded";
+}
+export interface PongMsg {
+  type: "pong"; // heartbeat reply
 }
 export interface RenameMsg {
   type: "rename";
@@ -89,9 +98,12 @@ export type WsInbound =
   | JoinResolvedMsg
   | JoinDeniedMsg
   | AdminChangedMsg
+  | AdminOfferMsg
+  | AdminOfferWithdrawnMsg
   | KickedMsg
   | SessionEndedMsg
-  | RenameMsg;
+  | RenameMsg
+  | PongMsg;
 
 // The server serializes Op via Jackson: `type` is the enum name ("INSERT" /
 // "DELETE"). Normalize to our lowercase wire model before transforming.
@@ -133,4 +145,7 @@ export type WsOutbound =
   | { type: "reject"; joinKey: string }
   | { type: "kick"; clientId: string }
   | { type: "endsession" }
-  | { type: "rename"; fileName: string };
+  | { type: "acceptAdmin" }
+  | { type: "declineAdmin" }
+  | { type: "rename"; fileName: string }
+  | { type: "ping" };

@@ -4,6 +4,7 @@ import { Sidebar } from "../shell/Sidebar";
 import { StatusBar } from "../shell/StatusBar";
 import { EditorPane } from "./EditorPane";
 import { JoinRequestPanel } from "./JoinRequestPanel";
+import { AdminOfferPrompt } from "./AdminOfferPrompt";
 import { ActionsPopover } from "./ActionsPopover";
 import { useSessionStore } from "../../state/store";
 
@@ -11,6 +12,7 @@ export function Workspace() {
   const [actionsOpen, setActionsOpen] = useState(false);
   const role = useSessionStore((s) => s.role);
   const hasRequests = useSessionStore((s) => s.joinRequests.length > 0);
+  const adminOffer = useSessionStore((s) => s.adminOffer);
 
   return (
     <div className="flex h-full flex-col bg-surface-page">
@@ -23,6 +25,7 @@ export function Workspace() {
           </div>
           <StatusBar />
           {role === "CREATOR" && hasRequests && <JoinRequestPanel />}
+          {adminOffer && <AdminOfferPrompt />}
           {actionsOpen && <ActionsPopover onClose={() => setActionsOpen(false)} />}
         </section>
       </div>

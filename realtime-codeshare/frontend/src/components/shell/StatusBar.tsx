@@ -4,6 +4,7 @@ import { Icon } from "../ui/Icon";
 const CONN = {
   online: { label: "Live Session", color: "bg-success", text: "text-text-muted" },
   connecting: { label: "Connecting", color: "bg-participant-3", text: "text-text-muted" },
+  reconnecting: { label: "Reconnecting", color: "bg-participant-3", text: "text-text-muted" },
   disconnected: { label: "Disconnected", color: "bg-danger", text: "text-danger" },
 } as const;
 

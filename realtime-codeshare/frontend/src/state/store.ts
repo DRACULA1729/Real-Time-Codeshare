@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { PresenceUser, Role } from "../ws/messages";
 
 export type Phase = "create" | "join" | "waiting" | "workspace" | "denied";
-export type ConnectionState = "connecting" | "online" | "disconnected";
+export type ConnectionState = "connecting" | "online" | "reconnecting" | "disconnected";
 
 export interface JoinRequest {
   joinKey: string;
@@ -28,6 +28,7 @@ interface SessionState {
   connection: ConnectionState;
   deniedReason: string | null;
   reconnecting: boolean;
+  adminOffer: boolean; // the host left and the seat is offered to us
   cursorLine: number;
   cursorCol: number;
 
@@ -43,6 +44,7 @@ interface SessionState {
   removeJoinRequest: (joinKey: string) => void;
   setConnection: (c: ConnectionState) => void;
   setDenied: (reason: string) => void;
+  setAdminOffer: (v: boolean) => void;
   setFileName: (name: string) => void;
   setLanguage: (lang: string, ext: string) => void;
   reset: () => void;
@@ -66,6 +68,7 @@ const initial = {
   connection: "connecting" as ConnectionState,
   deniedReason: null as string | null,
   reconnecting: false,
+  adminOffer: false,
   cursorLine: 1,
   cursorCol: 1,
 };
@@ -81,7 +84,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   applyInit: ({ document, version, role, token, fileName }) =>
     // fileName rides along atomically: a reconnect adopts the authoritative name,
     // covering renames broadcast while this client was disconnected.
-    set({ initialDocument: document, version, role, token, fileName, phase: "workspace", connection: "online", reconnecting: false }),
+    set({ initialDocument: document, version, role, token, fileName, phase: "workspace", connection: "online", reconnecting: false, adminOffer: false }),
   setRole: (role) => set({ role }),
   setVersion: (version) => set({ version }),
   setPresence: (users) => set({ users }),
@@ -90,6 +93,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   removeJoinRequest: (joinKey) => set((s) => ({ joinRequests: s.joinRequests.filter((j) => j.joinKey !== joinKey) })),
   setConnection: (connection) => set({ connection }),
   setDenied: (reason) => set({ phase: "denied", deniedReason: reason, reconnecting: false }),
+  setAdminOffer: (adminOffer) => set({ adminOffer }),
   setFileName: (fileName) => set({ fileName }),
   setLanguage: (language, languageExt) => set({ language, languageExt }),
   reset: () => set({ ...initial }),

@@ -70,6 +70,21 @@ public class OTService {
         repository.save(sessionId, snap.document(), snap.version(), store.getName());
     }
 
+    /** Save only rooms changed since their last save — the short-interval write-through
+     *  that keeps the crash-loss window to a few seconds without per-op writes. */
+    public void persistDirty() {
+        sessions.forEach((id, store) -> {
+            Snapshot snap = store.takeDirtySnapshot();
+            if (snap == null) return;
+            try {
+                repository.save(id, snap.document(), snap.version(), store.getName());
+            } catch (RuntimeException e) {
+                store.markDirty();                 // retry on the next sweep
+                log.warn("Dirty persist failed for session {}: {}", id, e.toString());
+            }
+        });
+    }
+
     /** Snapshot every resident room — periodic backstop so a crash loses at most one interval. */
     public void persistAll() {
         sessions.forEach((id, store) -> {
@@ -92,8 +107,18 @@ public class OTService {
         return result;
     }
 
-    /** Drop a room's entire OT state, including its persisted snapshot. Called when
-     *  a room is ended by the admin or fully reaped after the idle TTL. */
+    /** Persist and drop a room's resident store but keep its durable snapshot (the
+     *  end-session guard): a rejoin rehydrates it, and only the idle reap's
+     *  {@link #evict} deletes it. Removed first so every committed op is in the save. */
+    public void unload(String sessionId) {
+        DocumentStore store = sessions.remove(sessionId);
+        if (store == null) return;
+        Snapshot snap = store.snapshot();
+        repository.save(sessionId, snap.document(), snap.version(), store.getName());
+    }
+
+    /** Drop a room's entire OT state, including its persisted snapshot. Called only
+     *  when a room is fully reaped after the idle TTL. */
     public void evict(String sessionId) {
         if (sessions.remove(sessionId) != null) {
             log.info("Evicted document store for session {}", sessionId);
@@ -346,6 +371,8 @@ public class OTService {
         private int compactedThroughVersion = 0;
         /** Shared base file name; display metadata, last-write-wins across clients. */
         private String name = "";
+        /** Changed since the last {@link #takeDirtySnapshot()}. */
+        private boolean dirty = false;
 
         public synchronized int getVersion() { return version.get(); }
 
@@ -355,7 +382,16 @@ public class OTService {
 
         public synchronized String getName() { return name; }
 
-        public synchronized void setName(String name) { this.name = name == null ? "" : name; }
+        public synchronized void setName(String name) { this.name = name == null ? "" : name; dirty = true; }
+
+        public synchronized void markDirty() { dirty = true; }
+
+        /** Snapshot and clear the dirty flag atomically, or null if nothing changed. */
+        public synchronized Snapshot takeDirtySnapshot() {
+            if (!dirty) return null;
+            dirty = false;
+            return snapshot();
+        }
 
         /** Rehydrate a fresh store from a persisted snapshot. History starts empty,
          *  so any op based before this version is treated as below the floor. */
@@ -400,6 +436,7 @@ public class OTService {
             }
 
             int newVersion = version.incrementAndGet();
+            dirty = true;
             history.add(new CommittedOp(transformed.copy(), newVersion));
 
             if (history.size() > MAX_HISTORY) {

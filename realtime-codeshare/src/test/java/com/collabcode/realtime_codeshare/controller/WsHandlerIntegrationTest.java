@@ -1,6 +1,9 @@
 package com.collabcode.realtime_codeshare.controller;
 
 import com.collabcode.realtime_codeshare.model.Session;
+import com.collabcode.realtime_codeshare.ot.OTService;
+import com.collabcode.realtime_codeshare.persistence.DocumentRepository;
+import com.collabcode.realtime_codeshare.persistence.StoredDocument;
 import com.collabcode.realtime_codeshare.service.SessionService;
 import com.collabcode.realtime_codeshare.ticket.TicketStore;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -38,6 +41,10 @@ class WsHandlerIntegrationTest {
     SessionService sessionService;
     @Autowired
     TicketStore ticketStore;
+    @Autowired
+    OTService otService;
+    @Autowired
+    DocumentRepository repository;
 
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -185,6 +192,78 @@ class WsHandlerIntegrationTest {
         host.sendMessage(new TextMessage("{\"type\":\"rename\",\"fileName\":5}"));
         assertThat(waitFor(hostC, "rename", 1500)).as("non-string fileName dropped").isNull();
 
+        host.close(CloseStatus.NORMAL);
+    }
+
+    /** Host + approved guest, both admitted. Returns {host, guest} sockets. */
+    private WebSocketSession[] hostAndGuest(String sid, String adminToken, Collector hostC, Collector guestC) throws Exception {
+        WebSocketSession host = connect(sid, "host", "Host", ticketStore.issue(sid, adminToken, "host"), hostC);
+        assertThat(waitFor(hostC, "init")).isNotNull();
+        WebSocketSession guest = connect(sid, "guest", "Guest", ticketStore.issue(sid, null, "guest"), guestC);
+        JsonNode jr = waitFor(hostC, "joinRequest");
+        host.sendMessage(new TextMessage("{\"type\":\"approve\",\"joinKey\":\"" + jr.path("joinKey").asText() + "\"}"));
+        assertThat(waitFor(guestC, "init")).isNotNull();
+        return new WebSocketSession[] {host, guest};
+    }
+
+    @Test
+    void hostLeavingOffersAdmin_guestBecomesAdminOnlyAfterAccepting() throws Exception {
+        Session session = sessionService.createSession("Host", "#7aa2f7");
+        String sid = session.getSessionId();
+        Collector hostC = new Collector(), guestC = new Collector();
+        WebSocketSession[] ws = hostAndGuest(sid, session.getCreatorToken(), hostC, guestC);
+
+        ws[0].close(CloseStatus.NORMAL);
+        assertThat(waitFor(guestC, "adminOffer")).as("guest is offered the seat").isNotNull();
+        assertThat(sessionService.isAdmin(sid, session.getCreatorToken())).as("seat parked until accepted").isTrue();
+
+        ws[1].sendMessage(new TextMessage("{\"type\":\"acceptAdmin\"}"));
+        JsonNode changed = waitFor(guestC, "adminChanged");
+        assertThat(changed).isNotNull();
+        assertThat(changed.path("clientId").asText()).isEqualTo("guest");
+
+        ws[1].close(CloseStatus.NORMAL);
+    }
+
+    @Test
+    void endSessionKeepsTheDurableSnapshotForTheGraceWindow() throws Exception {
+        Session session = sessionService.createSession("Host", "#7aa2f7");
+        String sid = session.getSessionId();
+        String adminToken = session.getCreatorToken();
+
+        Collector hostC = new Collector();
+        WebSocketSession host = connect(sid, "host", "Host", ticketStore.issue(sid, adminToken, "host"), hostC);
+        assertThat(waitFor(hostC, "init")).isNotNull();
+        host.sendMessage(new TextMessage("{\"type\":\"insert\",\"clientId\":\"host\",\"baseVersion\":0,\"pos\":0,\"text\":\"keep\"}"));
+        assertThat(waitFor(hostC, "op")).isNotNull();
+
+        host.sendMessage(new TextMessage("{\"type\":\"endsession\"}"));
+        assertThat(waitFor(hostC, "sessionEnded")).isNotNull();
+        long end = System.currentTimeMillis() + 5000;
+        while (otService.hasStore(sid) && System.currentTimeMillis() < end) Thread.sleep(50);
+
+        assertThat(otService.hasStore(sid)).as("evicted from RAM").isFalse();
+        assertThat(repository.load(sid)).as("durable snapshot survives end-session")
+                .get().extracting(StoredDocument::text).isEqualTo("keep");
+
+        // Within the grace window the host can reopen the room and gets the document back.
+        Collector againC = new Collector();
+        WebSocketSession again = connect(sid, "host2", "Host", ticketStore.issue(sid, adminToken, "host2"), againC);
+        JsonNode init = waitFor(againC, "init");
+        assertThat(init).isNotNull();
+        assertThat(init.path("document").asText()).isEqualTo("keep");
+        again.close(CloseStatus.NORMAL);
+    }
+
+    @Test
+    void pingIsAnsweredWithPong() throws Exception {
+        Session session = sessionService.createSession("Host", "#7aa2f7");
+        String sid = session.getSessionId();
+        Collector c = new Collector();
+        WebSocketSession host = connect(sid, "host", "Host", ticketStore.issue(sid, session.getCreatorToken(), "host"), c);
+        assertThat(waitFor(c, "init")).isNotNull();
+        host.sendMessage(new TextMessage("{\"type\":\"ping\"}"));
+        assertThat(waitFor(c, "pong")).isNotNull();
         host.close(CloseStatus.NORMAL);
     }
 

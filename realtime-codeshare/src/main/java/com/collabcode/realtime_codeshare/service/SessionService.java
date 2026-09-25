@@ -36,10 +36,16 @@ public class SessionService {
     private final SecureRandom random = new SecureRandom();
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
     private final int maxRejected;
+    private final long adminOfferTimeoutMs;
 
-    public SessionService(@Value("${codeshare.session.max-rejected-attempts:3}") int maxRejected) {
+    public SessionService(@Value("${codeshare.session.max-rejected-attempts:3}") int maxRejected,
+                          @Value("${codeshare.session.admin-offer-timeout-ms:30000}") long adminOfferTimeoutMs) {
         this.maxRejected = maxRejected;
+        this.adminOfferTimeoutMs = adminOfferTimeoutMs;
     }
+
+    /** How long a member has to accept a vacated admin seat before it moves on. */
+    public long adminOfferTimeoutMs() { return adminOfferTimeoutMs; }
 
     public static boolean isValidIdFormat(String id) {
         return id != null && ID_FORMAT.matcher(id).matches();
@@ -187,21 +193,33 @@ public class SessionService {
         return s == null ? null : s.getMembers().get(token);
     }
 
-    /** Mark an admitted token as connected (admission-ordered). */
-    public void markActive(String sessionId, String token) {
+    /**
+     * Mark an admitted token as connected (admission-ordered). A parked admin coming
+     * back while its seat is on offer simply resumes, and the offer is withdrawn.
+     *
+     * @return the token whose admin offer was withdrawn, otherwise null.
+     */
+    public String markActive(String sessionId, String token) {
         Session s = sessions.get(sessionId);
-        if (s == null) return;
+        if (s == null) return null;
         synchronized (s) {
             s.getActiveOrder().add(token);
             s.touch(System.currentTimeMillis());
+            String offered = s.getAdminOfferToken();
+            if (offered == null || !s.isAdmin(token)) return null;
+            clearAdminOffer(s);
+            log.info("Session {}: admin returned, offer withdrawn", sessionId);
+            return offered;
         }
     }
 
     /**
-     * Mark a token disconnected. If it held admin and others remain connected,
-     * promote the longest-present remaining member to CREATOR.
+     * Mark a token disconnected. If it held admin (or the pending admin offer) and
+     * others remain connected, offer the seat to the next member in admission order.
+     * Nobody is promoted until they accept: the admin token stays parked meanwhile,
+     * so admin actions are locked.
      *
-     * @return the new admin token if admin transferred, otherwise null.
+     * @return the token newly offered admin, otherwise null.
      */
     public String markInactive(String sessionId, String token) {
         Session s = sessions.get(sessionId);
@@ -209,16 +227,85 @@ public class SessionService {
         synchronized (s) {
             s.getActiveOrder().remove(token);
             s.touch(System.currentTimeMillis());
-            if (!token.equals(s.getCurrentAdminToken())) return null;
-
-            String next = s.getActiveOrder().stream().findFirst().orElse(null); // longest-present
-            if (next == null) return null; // room empty; admin role stays parked on the creator token
-            s.setCurrentAdminToken(next);
-            User promoted = s.getMembers().get(next);
-            if (promoted != null) promoted.setRole(Role.CREATOR);
-            log.info("Session {}: admin transferred to {}", sessionId, next);
-            return next;
+            if (token.equals(s.getCurrentAdminToken())) {
+                s.getAdminOfferDeclined().clear(); // fresh vacancy
+                return offerAdminSeat(sessionId, s, null);
+            }
+            if (token.equals(s.getAdminOfferToken())) return offerAdminSeat(sessionId, s, null);
+            return null;
         }
+    }
+
+    /** The offered member takes the admin seat. Returns false if no offer is out for them. */
+    public boolean acceptAdmin(String sessionId, String token) {
+        Session s = sessions.get(sessionId);
+        if (s == null || token == null) return false;
+        synchronized (s) {
+            if (!token.equals(s.getAdminOfferToken())) return false;
+            s.setCurrentAdminToken(token);
+            User promoted = s.getMembers().get(token);
+            if (promoted != null) promoted.setRole(Role.CREATOR);
+            clearAdminOffer(s);
+            log.info("Session {}: admin offer accepted, admin transferred", sessionId);
+            return true;
+        }
+    }
+
+    /** The offered member declines; the seat is offered to the next member, if any.
+     *  @return the token newly offered admin, otherwise null (room stays admin-locked). */
+    public String declineAdmin(String sessionId, String token) {
+        Session s = sessions.get(sessionId);
+        if (s == null || token == null) return null;
+        synchronized (s) {
+            if (!token.equals(s.getAdminOfferToken())) return null;
+            s.getAdminOfferDeclined().add(token);
+            return offerAdminSeat(sessionId, s, token);
+        }
+    }
+
+    /** An unanswered offer lapses to the next member (wrapping, so a lone candidate is
+     *  re-offered). A no-op unless {@code token} still holds an offer that has expired,
+     *  so stale timers are harmless.
+     *  @return the token now offered admin, or null if nothing changed. */
+    public String lapseAdminOffer(String sessionId, String token, long nowMs) {
+        Session s = sessions.get(sessionId);
+        if (s == null || token == null) return null;
+        synchronized (s) {
+            if (!token.equals(s.getAdminOfferToken()) || nowMs < s.getAdminOfferDeadlineMs()) return null;
+            return offerAdminSeat(sessionId, s, token);
+        }
+    }
+
+    /** Admin ended the room: nobody is connected any more, so it idles toward the
+     *  normal reap (which alone deletes the durable snapshot). */
+    public void disconnectAll(String sessionId) {
+        Session s = sessions.get(sessionId);
+        if (s == null) return;
+        synchronized (s) {
+            s.getActiveOrder().clear();
+            clearAdminOffer(s);
+            s.touch(System.currentTimeMillis());
+        }
+    }
+
+    /** Offer the seat to the first non-declined connected member after {@code after}
+     *  (wrapping; from the longest-present when null/absent). Caller holds the monitor. */
+    private String offerAdminSeat(String sessionId, Session s, String after) {
+        List<String> order = new ArrayList<>(s.getActiveOrder());
+        int start = order.indexOf(after) + 1;
+        String next = null;
+        for (int i = 0; i < order.size(); i++) {
+            String candidate = order.get((start + i) % order.size());
+            if (!s.getAdminOfferDeclined().contains(candidate)) { next = candidate; break; }
+        }
+        s.setAdminOffer(next, next == null ? 0 : System.currentTimeMillis() + adminOfferTimeoutMs);
+        if (next != null) log.info("Session {}: admin seat offered to the next member", sessionId);
+        return next;
+    }
+
+    private static void clearAdminOffer(Session s) {
+        s.setAdminOffer(null, 0);
+        s.getAdminOfferDeclined().clear();
     }
 
     /** Reap idle sessions with no connected members. Returns the evicted ids. */

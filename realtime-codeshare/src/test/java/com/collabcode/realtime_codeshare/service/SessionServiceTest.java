@@ -9,11 +9,11 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Covers the meet-style admission state machine and admin transfer. */
+/** Covers the meet-style admission state machine and the confirmed admin transfer. */
 class SessionServiceTest {
 
     private SessionService newService() {
-        return new SessionService(3); // max 3 rejected attempts
+        return new SessionService(3, 30_000); // max 3 rejected attempts, 30s admin offer
     }
 
     @Test
@@ -94,28 +94,56 @@ class SessionServiceTest {
         assertEquals(JoinOutcome.DENIED, blocked.outcome());
     }
 
-    @Test
-    void adminTransfersToLongestPresentRemainingMemberWhenHostLeaves() {
-        SessionService svc = newService();
+    /** Host + two approved joiners, all connected in admission order. Returns {sid, host, a, b}. */
+    private String[] roomWithTwoJoiners(SessionService svc) {
         Session s = svc.createSession("Host", "#fff");
         String sid = s.getSessionId();
         String hostToken = s.getCreatorToken();
-
-        // Two joiners approved and connected, in order.
         JoinResult a = svc.evaluateJoin(sid, null, "ca", "A", "#0f0");
         svc.approve(sid, hostToken, a.joinKey());
         JoinResult b = svc.evaluateJoin(sid, null, "cb", "B", "#00f");
         svc.approve(sid, hostToken, b.joinKey());
-
         svc.markActive(sid, hostToken);
         svc.markActive(sid, a.token());
         svc.markActive(sid, b.token());
+        return new String[] {sid, hostToken, a.token(), b.token()};
+    }
 
-        // Host disconnects -> admin goes to the longest-present remaining member (A).
-        String newAdmin = svc.markInactive(sid, hostToken);
-        assertEquals(a.token(), newAdmin);
-        assertTrue(svc.isAdmin(sid, a.token()));
-        assertFalse(svc.isAdmin(sid, hostToken));
+    @Test
+    void hostLeavingOffersAdminToLongestPresentMember_promotedOnlyOnAccept() {
+        SessionService svc = newService();
+        String[] r = roomWithTwoJoiners(svc);
+        String sid = r[0], host = r[1], a = r[2], b = r[3];
+
+        // Host disconnects -> A (longest-present) is offered the seat, not promoted.
+        assertEquals(a, svc.markInactive(sid, host));
+        assertFalse(svc.isAdmin(sid, a), "no silent escalation before accepting");
+        assertTrue(svc.isAdmin(sid, host), "seat stays parked on the host token");
+
+        assertFalse(svc.acceptAdmin(sid, b), "only the offered member can accept");
+        assertTrue(svc.acceptAdmin(sid, a));
+        assertTrue(svc.isAdmin(sid, a));
+        assertFalse(svc.isAdmin(sid, host));
+    }
+
+    @Test
+    void adminOfferMovesOnWhenDeclinedOrLapsed_andIsWithdrawnWhenHostReturns() {
+        SessionService svc = newService();
+        String[] r = roomWithTwoJoiners(svc);
+        String sid = r[0], host = r[1], a = r[2], b = r[3];
+
+        assertEquals(a, svc.markInactive(sid, host));
+        assertEquals(b, svc.declineAdmin(sid, a), "decline passes to the next member");
+
+        long now = System.currentTimeMillis();
+        assertNull(svc.lapseAdminOffer(sid, b, now), "not expired yet -> no-op");
+        assertEquals(b, svc.lapseAdminOffer(sid, b, now + 60_000),
+                "lapse wraps past the decliner back to the only candidate left");
+
+        // Host reconnects mid-offer: it simply resumes, the pending offer is withdrawn.
+        assertEquals(b, svc.markActive(sid, host));
+        assertFalse(svc.acceptAdmin(sid, b));
+        assertTrue(svc.isAdmin(sid, host));
     }
 
     @Test

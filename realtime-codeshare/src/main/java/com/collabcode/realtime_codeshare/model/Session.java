@@ -1,5 +1,6 @@
 package com.collabcode.realtime_codeshare.model;
 
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
@@ -31,6 +32,12 @@ public class Session {
     private final Map<String, Integer> rejectedByToken = new ConcurrentHashMap<>();
     /** Tokens currently connected, in admission order — drives admin transfer. */
     private final Set<String> activeOrder = new LinkedHashSet<>();
+    /** Member currently offered the vacated admin seat (null = no offer out). The
+     *  seat stays parked on {@code currentAdminToken} until someone accepts. */
+    private String adminOfferToken;
+    private long adminOfferDeadlineMs;
+    /** Members who declined the current vacancy; skipped until an admin is seated. */
+    private final Set<String> adminOfferDeclined = new HashSet<>();
 
     private volatile long lastActivityMs;
 
@@ -55,6 +62,14 @@ public class Session {
     public Map<String, User> getPendingByJoinKey() { return pendingByJoinKey; }
     public Map<String, Integer> getRejectedByToken() { return rejectedByToken; }
     public Set<String> getActiveOrder() { return activeOrder; }
+
+    public String getAdminOfferToken() { return adminOfferToken; }
+    public long getAdminOfferDeadlineMs() { return adminOfferDeadlineMs; }
+    public void setAdminOffer(String token, long deadlineMs) {
+        this.adminOfferToken = token;
+        this.adminOfferDeadlineMs = deadlineMs;
+    }
+    public Set<String> getAdminOfferDeclined() { return adminOfferDeclined; }
 
     public long getLastActivityMs() { return lastActivityMs; }
     public void touch(long nowMs) { this.lastActivityMs = nowMs; }
