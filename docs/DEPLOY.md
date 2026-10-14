@@ -1,10 +1,16 @@
-# Deploying to Oracle Cloud (Always Free ARM)
+# Deploying to a dedicated VM (Docker Compose)
 
-One VM runs everything: Caddy (TLS) → app → Postgres, via `docker compose`.
-Cost target: ₹0. The Always Free allowance is 4 OCPU / 24 GB of Ampere A1 per
-month; we use 2 OCPU / 12 GB and lock the account so nothing else can be created.
+One VM runs everything: Caddy (TLS) → app → Postgres, via `docker compose`
+from `deploy/`. Any Ubuntu VM with Docker works; sections 2 to 6 are generic.
+Section 1 is specific to Oracle Cloud's Always Free ARM tier, which was the
+original target (4 OCPU / 24 GB of Ampere A1 per month at ₹0; this uses 2 OCPU /
+12 GB and locks the account so nothing else can be created). Skip it on another
+provider.
 
-## 1. Oracle account (once)
+The app currently runs on a shared VPS without Docker instead; see
+`deploy/vps/README.md` for that setup.
+
+## 1. Oracle Cloud account (only if hosting there)
 
 1. Sign up at cloud.oracle.com. **Home region: Mumbai or Hyderabad.** It can't be
    changed later, and Always Free A1 only lives in the home region.
@@ -93,14 +99,13 @@ Documents live in Postgres and survive redeploys. Session registries are in memo
 ## 5. Backups and monitoring
 
 - Backup: `crontab -e` → `30 2 * * * /opt/codeshare/deploy/backup.sh >> /var/log/codeshare-backup.log 2>&1`.
-  For off-site copies install rclone and configure a remote named `r2` (Cloudflare
-  R2, 10 GB free); the script picks it up automatically.
+  For off-site copies, add an `rclone copy` of the dump to the script (Cloudflare
+  R2 has a 10 GB free tier).
   Restore: `zcat backups/<file> | docker compose exec -T db psql -U codeshare codeshare`.
 - Uptime: UptimeRobot (free) on `https://<PUBLIC_HOST>/actuator/health`, 5-minute
-  interval. This also keeps the VM off Oracle's idle-reclaim list only if real
-  traffic does; the check itself is negligible. Reclaim needs CPU, memory **and**
-  network all under 20% for 7 days, and 12 GB with the JVM resident already puts
-  memory above that.
+  interval. On Oracle Always Free, idle reclaim needs CPU, memory **and** network
+  all under 20% for 7 days; the check itself is negligible, but 12 GB with the JVM
+  resident already keeps memory above that line.
 - Unattended OS patches: `sudo apt install unattended-upgrades` (default config is fine).
 
 ## 6. GitHub push (optional)
