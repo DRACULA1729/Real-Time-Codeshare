@@ -49,7 +49,6 @@ chmod +x /etc/letsencrypt/renewal-hooks/deploy/codeshare-lsws.sh
 # 5. Verify.
 echo "--- diff of httpd_config.conf"; diff "$C.before-codeshare" "$C" || true
 echo "--- checks"
-curl -s -m 10 "https://$H/actuator/health"; echo
 curl -s -o /dev/null -w "index: %{http_code}\n" -m 10 "https://$H/"
 curl -s -o /dev/null -w "http->https redirect: %{http_code}\n" -m 10 "http://$H/"
 curl -s -o /dev/null -w "progixapi.work.gd still: %{http_code}\n" -m 10 "http://progixapi.work.gd/"

@@ -1,6 +1,10 @@
 # Single-VM production stack: Caddy (TLS + reverse proxy) -> app -> Postgres.
 # Run from this directory: `docker compose up -d --build`. Secrets come from ./.env
 # (copy env.example). See docs/DEPLOY.md.
+x-logging: &log
+  driver: json-file
+  options: { max-size: "20m", max-file: "5" }
+
 services:
   app:
     build:
@@ -26,9 +30,7 @@ services:
       resources:
         limits:
           memory: 2g
-    logging:
-      driver: json-file
-      options: { max-size: "20m", max-file: "5" }
+    logging: *log
 
   db:
     image: postgres:17-alpine
@@ -48,9 +50,7 @@ services:
       resources:
         limits:
           memory: 512m
-    logging:
-      driver: json-file
-      options: { max-size: "10m", max-file: "3" }
+    logging: *log
 
   caddy:
     image: caddy:2-alpine
@@ -65,9 +65,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-    logging:
-      driver: json-file
-      options: { max-size: "10m", max-file: "3" }
+    logging: *log
 
 volumes:
   pgdata:
