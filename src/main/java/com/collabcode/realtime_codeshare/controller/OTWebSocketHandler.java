@@ -225,7 +225,7 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
             case "cursor" -> { if (requireAdmitted(session, sessionId)) handleCursor(session, sessionId, node); }
             case "resync" -> { if (requireAdmitted(session, sessionId) && chargeCursorBudget(session)) handleResync(session, sessionId); }
             case "catchup" -> { if (requireAdmitted(session, sessionId) && chargeCursorBudget(session)) handleCatchup(session, sessionId, node); }
-            case "rename" -> { if (requireAdmitted(session, sessionId)) handleRename(session, sessionId, node); }
+            case "rename" -> { if (requireAdmitted(session, sessionId) && requireAdmin(sessionId, token)) handleRename(session, sessionId, node); }
             case "setlanguage" -> { if (requireAdmitted(session, sessionId)) handleSetLanguage(session, sessionId, node); }
             case "approve" -> { if (requireAdmin(sessionId, token)) handleApprove(sessionId, token, node); }
             case "reject" -> { if (requireAdmin(sessionId, token)) handleReject(sessionId, token, node); }

@@ -389,6 +389,26 @@ class WsHandlerIntegrationTest {
     }
 
     @Test
+    void onlyTheHostCanRename() throws Exception {
+        Session session = sessionService.createSession("Host", "#7aa2f7");
+        String sid = session.getSessionId();
+        Collector hostC = new Collector();
+        WebSocketSession host = connect(sid, "host", "Host", ticketStore.issue(sid, session.getCreatorToken(), "host"), hostC);
+        assertThat(waitFor(hostC, "init")).isNotNull();
+        Collector g = new Collector();
+        WebSocketSession guest = connect(sid, "g", "Guest", ticketStore.issue(sid, null, "g"), g);
+        waitFor(g, "waitingForApproval");
+        host.sendMessage(new TextMessage("{\"type\":\"approve\",\"joinKey\":\"" + waitFor(hostC, "joinRequest").path("joinKey").asText() + "\"}"));
+        assertThat(waitFor(g, "init")).isNotNull();
+
+        guest.sendMessage(new TextMessage("{\"type\":\"rename\",\"fileName\":\"by_guest\"}"));
+        assertThat(waitFor(hostC, "rename", 1500)).as("a joiner's rename is dropped").isNull();
+        host.sendMessage(new TextMessage("{\"type\":\"rename\",\"fileName\":\"by_host\"}"));
+        assertThat(waitFor(g, "rename").path("fileName").asText()).isEqualTo("by_host");
+        host.close(CloseStatus.NORMAL);
+    }
+
+    @Test
     void pingIsAnsweredWithPong() throws Exception {
         Session session = sessionService.createSession("Host", "#7aa2f7");
         String sid = session.getSessionId();

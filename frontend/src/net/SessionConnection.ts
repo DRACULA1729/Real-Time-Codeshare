@@ -71,6 +71,7 @@ export class SessionConnection {
   private reconnectAttempts = 0;
   private awaitingPong = false;
   private waiting = false; // in the waiting room: a drop reconnects instead of "not found"
+  private transientFailure = false; // last attempt died on the network/5xx: retry, don't declare the session gone
   // After a reconnect, op sends are held until the missed ops have been replayed.
   private resuming = false;
   // Ops that arrived ahead of a gap in the version sequence, applied once it fills.
@@ -127,6 +128,7 @@ export class SessionConnection {
         return;
       }
       if (e instanceof ApiError && (e.status === 404 || e.status === 400)) this.reconnectAttempts = 0;
+      else this.transientFailure = true; // server restarting or no network: not "not found"
       this.onClose();
       return;
     }
@@ -175,6 +177,7 @@ export class SessionConnection {
   }
 
   private stopTimers(): void {
+    if (typeof window !== "undefined") window.removeEventListener("online", this.retryNow);
     if (this.probeTimer) clearTimeout(this.probeTimer);
     if (this.gapTimer) clearTimeout(this.gapTimer);
     this.gapTimer = null;
@@ -439,7 +442,8 @@ export class SessionConnection {
     this.stopTimers();
     this.ws = null;
     if (this.intentionalClose || this.denied) return; // user left, or terminal state already surfaced
-    if (this.admitted || this.waiting || this.reconnectAttempts > 0) {
+    if (this.admitted || this.waiting || this.reconnectAttempts > 0 || this.transientFailure) {
+      this.transientFailure = false;
       this.admitted = false; // dropped while admitted/waiting, or a retry failed: back off and redial
       this.scheduleReconnect();
     } else {
@@ -459,7 +463,16 @@ export class SessionConnection {
     this.reconnectAttempts++;
     this.h.onReconnecting();
     this.reconnectTimer = setTimeout(() => void this.openWithTicket(), delay * (0.5 + Math.random() / 2));
+    // The network came back: don't sit out the rest of a 30 s backoff.
+    if (typeof window !== "undefined") window.addEventListener("online", this.retryNow, { once: true });
   }
+
+  private retryNow = (): void => {
+    if (!this.reconnectTimer) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    void this.openWithTicket();
+  };
 
   private sendRaw(obj: WsOutbound): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));

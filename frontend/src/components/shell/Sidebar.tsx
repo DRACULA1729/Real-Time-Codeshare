@@ -8,6 +8,7 @@ import { PresencePanel } from "./PresencePanel";
 export function Sidebar({ onOpenActions }: { onOpenActions: () => void }) {
   const session = useSession();
   const fileName = useSessionStore((s) => s.fileName);
+  const canRename = useSessionStore((s) => s.role === "CREATOR");
   const language = useSessionStore((s) => s.language);
   const languageExt = useSessionStore((s) => s.languageExt);
   const userCount = useSessionStore((s) => s.users.length);
@@ -64,12 +65,12 @@ export function Sidebar({ onOpenActions }: { onOpenActions: () => void }) {
             </div>
           ) : (
             <p
-              onDoubleClick={startEditing}
-              title="Double-click to rename"
+              onDoubleClick={canRename ? startEditing : undefined}
+              title={canRename ? "Double-click to rename" : undefined}
               className="flex items-center gap-1 truncate text-body-md font-semibold text-text-primary"
             >
               <span className="truncate">{displayName}</span>
-              <button
+              {canRename && (<button
                 type="button"
                 onClick={startEditing}
                 aria-label="Rename file"
@@ -77,6 +78,7 @@ export function Sidebar({ onOpenActions }: { onOpenActions: () => void }) {
               >
                 <Icon name="edit" className="text-[14px]" />
               </button>
+              )}
             </p>
           )}
           <p className="font-mono text-label-caps uppercase text-text-muted">{language}</p>
