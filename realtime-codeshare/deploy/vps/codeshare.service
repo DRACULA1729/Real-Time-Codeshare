@@ -1,0 +1,22 @@
+[Unit]
+Description=Realtime Codeshare
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+User=codeshare
+Group=codeshare
+EnvironmentFile=/etc/codeshare/env
+WorkingDirectory=/opt/codeshare
+ExecStart=/usr/bin/java -jar /opt/codeshare/app.jar
+Restart=always
+RestartSec=5
+MemoryMax=900M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/codeshare
+
+[Install]
+WantedBy=multi-user.target

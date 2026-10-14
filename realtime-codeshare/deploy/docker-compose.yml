@@ -1,0 +1,75 @@
+# Single-VM production stack: Caddy (TLS + reverse proxy) -> app -> Postgres.
+# Run from this directory: `docker compose up -d --build`. Secrets come from ./.env
+# (copy env.example). See DEPLOY.md.
+services:
+  app:
+    build:
+      context: ..
+    image: realtime-codeshare:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod,postgres
+      DB_URL: jdbc:postgresql://db:5432/codeshare
+      DB_USER: codeshare
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      CODESHARE_ALLOWED_ORIGINS: https://${PUBLIC_HOST:?set PUBLIC_HOST in .env}
+      # Caddy runs on the compose network (172.16/12), which the default TRUSTED_PROXIES covers.
+      JAVA_OPTS: -XX:MaxRAMPercentage=75
+      SPRING_THREADS_VIRTUAL_ENABLED: "true"
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GITHUB_REDIRECT_URI: ${GITHUB_REDIRECT_URI:-}
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: codeshare
+      POSTGRES_USER: codeshare
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codeshare -d codeshare"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
