@@ -27,7 +27,8 @@ export interface SessionHandlers {
   onPresence(users: PresenceUser[]): void;
   onCursor(clientId: string, pos: number): void;
   onCursorRemove(clientId: string): void;
-  onWaiting(token: string): void;
+  onWaiting(token: string, hostOnline: boolean): void;
+  onHostStatus(online: boolean): void;
   onJoinRequest(p: { joinKey: string; name: string; color: string }): void;
   onJoinResolved(joinKey: string): void;
   onDenied(reason?: string): void;
@@ -321,7 +322,10 @@ export class SessionConnection {
         this.waiting = true;
         this.reconnectAttempts = 0;
         this.token = msg.token;
-        this.h.onWaiting(msg.token);
+        this.h.onWaiting(msg.token, msg.hostOnline !== false);
+        break;
+      case "hostStatus":
+        this.h.onHostStatus(msg.online);
         break;
       case "joinRequest":
         this.h.onJoinRequest({ joinKey: msg.joinKey, name: msg.name, color: msg.color });

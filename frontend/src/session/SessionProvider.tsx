@@ -56,12 +56,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       onPresence: (users) => store.getState().setPresence(users),
       onCursor: (clientId, pos) => cursors.push(clientId, pos),
       onCursorRemove: (clientId) => cursors.remove(clientId),
-      onWaiting: (token) => {
+      onWaiting: (token, hostOnline) => {
         const s = store.getState();
         if (s.sessionId) storeProfile(s.sessionId, token, s.name, s.color);
         s.setReconnecting(false);
+        s.setHostOnline(hostOnline);
         s.setPhase("waiting");
       },
+      onHostStatus: (online) => store.getState().setHostOnline(online),
       onJoinRequest: (r) => store.getState().addJoinRequest(r),
       onJoinResolved: (joinKey) => store.getState().removeJoinRequest(joinKey),
       onDenied: () => store.getState().setDenied("The host declined your request."),

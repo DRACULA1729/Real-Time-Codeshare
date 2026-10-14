@@ -13,6 +13,7 @@ function Gate() {
   const reconnecting = useSessionStore((s) => s.reconnecting);
   const sessionId = useSessionStore((s) => s.sessionId) ?? "";
   const deniedReason = useSessionStore((s) => s.deniedReason);
+  const hostOnline = useSessionStore((s) => s.hostOnline);
   const session = useSession();
 
   const [creating, setCreating] = useState(false);
@@ -28,7 +29,7 @@ function Gate() {
   }
   if (phase === "workspace") return <Workspace />;
   if (reconnecting) return <Connecting />;
-  if (phase === "waiting") return <WaitingRoom sessionId={sessionId} onCancel={session.cancel} />;
+  if (phase === "waiting") return <WaitingRoom sessionId={sessionId} hostOnline={hostOnline} onCancel={session.cancel} />;
   if (phase === "join") return <JoinSession sessionId={sessionId} onJoin={session.askToJoin} />;
 
   return (
