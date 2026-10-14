@@ -25,11 +25,13 @@ DNS: DuckDNS A record `sushant-codeshare` -> the VPS (Sushant's DuckDNS account)
 
 ```sh
 ./mvnw -B -DskipTests clean package
-scp target/realtime-codeshare-*.jar codeshare-vps:/opt/codeshare/app.jar
-ssh codeshare-vps 'chown codeshare:codeshare /opt/codeshare/app.jar && systemctl restart codeshare && sleep 20 && curl -s 127.0.0.1:9091/actuator/health'
+deploy/vps/deploy.sh            # refuses while anyone is connected; --force to restart anyway
 ```
 
-About 20 s of downtime; open invite links are lost (session registry is in memory).
+About 20 s of "Reconnecting" for anyone in a room. Rooms, members and invite links
+survive the restart (`session_state` and `document_snapshot` in Postgres); clients
+reconnect into the same room with the same roles. The previous jar is kept as
+`app.jar.prev` for a quick rollback.
 
 ## Restore a backup
 
