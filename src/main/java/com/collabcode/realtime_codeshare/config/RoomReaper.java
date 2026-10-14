@@ -40,6 +40,7 @@ public class RoomReaper {
     public void sweep() {
         long now = System.currentTimeMillis();
         otService.persistAll();                                // periodic snapshot backstop
+        sessionService.persistDirty();                         // last-activity for the durable reaper
         handler.reapIdleRooms(idleTtlMs, now);                 // OT/socket backstop
         List<String> reaped = sessionService.reapIdle(idleTtlMs, now);
         for (String id : reaped) {

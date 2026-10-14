@@ -40,6 +40,8 @@ public class Session {
     private final Set<String> adminOfferDeclined = new HashSet<>();
 
     private volatile long lastActivityMs;
+    /** Touched since the last durable save (see SessionService.persistDirty). */
+    private volatile boolean dirty;
     /** The admin ended the room: no new tickets or joins; it idles to the normal reap. */
     private volatile boolean ended;
 
@@ -77,7 +79,9 @@ public class Session {
     public Set<String> getAdminOfferDeclined() { return adminOfferDeclined; }
 
     public long getLastActivityMs() { return lastActivityMs; }
-    public void touch(long nowMs) { this.lastActivityMs = nowMs; }
+    public void touch(long nowMs) { this.lastActivityMs = nowMs; this.dirty = true; }
+    public boolean isDirty() { return dirty; }
+    public void clearDirty() { dirty = false; }
 
     public boolean isApproved(String token) {
         return token != null && approvedTokens.contains(token);

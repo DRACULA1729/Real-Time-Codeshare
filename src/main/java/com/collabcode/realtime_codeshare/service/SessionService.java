@@ -1,6 +1,9 @@
 package com.collabcode.realtime_codeshare.service;
 
 import com.collabcode.realtime_codeshare.model.Session;
+import com.collabcode.realtime_codeshare.model.SessionState;
+import com.collabcode.realtime_codeshare.persistence.InMemorySessionRepository;
+import com.collabcode.realtime_codeshare.persistence.SessionRepository;
 import com.collabcode.realtime_codeshare.model.User;
 import com.collabcode.realtime_codeshare.security.Role;
 import org.slf4j.Logger;
@@ -34,14 +37,46 @@ public class SessionService {
     private static final String DEFAULT_COLOR = "#7aa2f7";
 
     private final SecureRandom random = new SecureRandom();
+    /** Resident sessions. The repository is the durable copy: a miss here is tried
+     *  there before it counts as "unknown", so a restart keeps rooms and tokens valid. */
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
+    private final SessionRepository repo;
     private final int maxRejected;
     private final long adminOfferTimeoutMs;
 
-    public SessionService(@Value("${codeshare.session.max-rejected-attempts:3}") int maxRejected,
+    @org.springframework.beans.factory.annotation.Autowired
+    public SessionService(SessionRepository repo,
+                          @Value("${codeshare.session.max-rejected-attempts:3}") int maxRejected,
                           @Value("${codeshare.session.admin-offer-timeout-ms:30000}") long adminOfferTimeoutMs) {
+        this.repo = repo;
         this.maxRejected = maxRejected;
         this.adminOfferTimeoutMs = adminOfferTimeoutMs;
+    }
+
+    /** Single-process convenience (tests). */
+    public SessionService(int maxRejected, long adminOfferTimeoutMs) {
+        this(new InMemorySessionRepository(), maxRejected, adminOfferTimeoutMs);
+    }
+
+    /** Resident session, or the durable copy loaded on a miss. */
+    private Session find(String id) {
+        if (id == null) return null;
+        Session s = sessions.get(id);
+        if (s != null || !isValidIdFormat(id)) return s;
+        return repo.load(id).map(st -> sessions.computeIfAbsent(id, k -> st.toSession())).orElse(null);
+    }
+
+    /** Durable write-through. Caller holds the session's monitor. */
+    private void save(Session s) {
+        repo.save(SessionState.of(s));
+        s.clearDirty();
+    }
+
+    /** Refresh last-activity for sessions touched since their last save (reaper tick). */
+    public void persistDirty() {
+        for (Session s : sessions.values()) {
+            if (s.isDirty()) synchronized (s) { save(s); }
+        }
     }
 
     /** How long a member has to accept a vacated admin seat before it moves on. */
@@ -68,17 +103,18 @@ public class SessionService {
             session = new Session(id, creator);
         } while (sessions.putIfAbsent(id, session) != null); // retry on the astronomically rare id clash
         session.touch(System.currentTimeMillis());
+        synchronized (session) { save(session); }
         log.info("Created session {}", id);
         return session;
     }
 
-    public Session get(String id) { return sessions.get(id); }
+    public Session get(String id) { return find(id); }
 
-    public boolean exists(String id) { return sessions.containsKey(id); }
+    public boolean exists(String id) { return find(id) != null; }
 
     /** Ended by its admin: kept only until the reap deletes it and its snapshot. */
     public boolean isEnded(String id) {
-        Session s = sessions.get(id);
+        Session s = find(id);
         return s != null && s.isEnded();
     }
 
@@ -86,16 +122,17 @@ public class SessionService {
     public int count() { return sessions.size(); }
 
     public boolean isAlive(String id) {
-        Session s = sessions.get(id);
+        Session s = find(id);
         return s != null && !s.getActiveOrder().isEmpty();
     }
 
     public void evict(String id) {
+        repo.delete(id);
         if (sessions.remove(id) != null) log.info("Evicted session {}", id);
     }
 
     public void touch(String id) {
-        Session s = sessions.get(id);
+        Session s = find(id);
         if (s != null) s.touch(System.currentTimeMillis());
     }
 
@@ -107,7 +144,7 @@ public class SessionService {
      * and skip re-approval on reconnect).
      */
     public JoinResult evaluateJoin(String sessionId, String token, String clientId, String name, String color) {
-        Session session = sessions.get(sessionId);
+        Session session = find(sessionId);
         if (session == null) return new JoinResult(JoinOutcome.DENIED, null, null, null, "unknown session");
 
         synchronized (session) {
@@ -125,6 +162,7 @@ public class SessionService {
                 } else {
                     session.getMembers().put(token, new User(token, clientId, safeName(name), safeColor(color), role));
                 }
+                save(session);
                 return new JoinResult(JoinOutcome.ADMITTED, token, null, role, null);
             }
 
@@ -141,13 +179,14 @@ public class SessionService {
                     .map(Map.Entry::getKey).findFirst().orElseGet(this::randomJoinKey);
             session.getPendingByJoinKey().put(joinKey,
                     new User(effectiveToken, clientId, safeName(name), safeColor(color), Role.JOINER));
+            save(session);
             return new JoinResult(JoinOutcome.PENDING, effectiveToken, joinKey, Role.JOINER, null);
         }
     }
 
     /** Admin approves a pending request. Returns the approved user, or null if not pending / not admin. */
     public User approve(String sessionId, String adminToken, String joinKey) {
-        Session session = sessions.get(sessionId);
+        Session session = find(sessionId);
         if (session == null) return null;
         synchronized (session) {
             if (!session.isAdmin(adminToken)) return null;
@@ -156,6 +195,7 @@ public class SessionService {
             session.getApprovedTokens().add(u.getToken());
             session.getMembers().put(u.getToken(), u);
             session.touch(System.currentTimeMillis());
+            save(session);
             log.info("Session {}: approved join {}", sessionId, joinKey);
             return u;
         }
@@ -163,7 +203,7 @@ public class SessionService {
 
     /** Admin rejects a pending request. Returns the rejected user, or null if not pending / not admin. */
     public User reject(String sessionId, String adminToken, String joinKey) {
-        Session session = sessions.get(sessionId);
+        Session session = find(sessionId);
         if (session == null) return null;
         synchronized (session) {
             if (!session.isAdmin(adminToken)) return null;
@@ -171,6 +211,7 @@ public class SessionService {
             if (u == null) return null;
             session.getRejectedByToken().merge(u.getToken(), 1, Integer::sum);
             session.touch(System.currentTimeMillis());
+            save(session);
             log.info("Session {}: rejected join {}", sessionId, joinKey);
             return u;
         }
@@ -178,27 +219,28 @@ public class SessionService {
 
     /** Revoke a member's access (kick): they may no longer be admitted without re-approval. */
     public void revoke(String sessionId, String token) {
-        Session s = sessions.get(sessionId);
+        Session s = find(sessionId);
         if (s == null || token == null) return;
         synchronized (s) {
             s.getApprovedTokens().remove(token);
             s.getMembers().remove(token);
             s.getActiveOrder().remove(token);
+            save(s);
         }
     }
 
     public boolean isAdmitted(String sessionId, String token) {
-        Session s = sessions.get(sessionId);
+        Session s = find(sessionId);
         return s != null && s.isApproved(token);
     }
 
     public boolean isAdmin(String sessionId, String token) {
-        Session s = sessions.get(sessionId);
+        Session s = find(sessionId);
         return s != null && s.isAdmin(token);
     }
 
     public User member(String sessionId, String token) {
-        Session s = sessions.get(sessionId);
+        Session s = find(sessionId);
         return s == null ? null : s.getMembers().get(token);
     }
 
@@ -209,7 +251,7 @@ public class SessionService {
      * @return the token whose admin offer was withdrawn, otherwise null.
      */
     public String markActive(String sessionId, String token) {
-        Session s = sessions.get(sessionId);
+        Session s = find(sessionId);
         if (s == null) return null;
         synchronized (s) {
             s.getActiveOrder().add(token);
@@ -231,7 +273,7 @@ public class SessionService {
      * @return the token newly offered admin, otherwise null.
      */
     public String markInactive(String sessionId, String token) {
-        Session s = sessions.get(sessionId);
+        Session s = find(sessionId);
         if (s == null) return null;
         synchronized (s) {
             s.getActiveOrder().remove(token);
@@ -247,7 +289,7 @@ public class SessionService {
 
     /** The offered member takes the admin seat. Returns false if no offer is out for them. */
     public boolean acceptAdmin(String sessionId, String token) {
-        Session s = sessions.get(sessionId);
+        Session s = find(sessionId);
         if (s == null || token == null) return false;
         synchronized (s) {
             if (!token.equals(s.getAdminOfferToken())) return false;
@@ -255,6 +297,7 @@ public class SessionService {
             User promoted = s.getMembers().get(token);
             if (promoted != null) promoted.setRole(Role.CREATOR);
             clearAdminOffer(s);
+            save(s);
             log.info("Session {}: admin offer accepted, admin transferred", sessionId);
             return true;
         }
@@ -263,7 +306,7 @@ public class SessionService {
     /** The offered member declines; the seat is offered to the next member, if any.
      *  @return the token newly offered admin, otherwise null (room stays admin-locked). */
     public String declineAdmin(String sessionId, String token) {
-        Session s = sessions.get(sessionId);
+        Session s = find(sessionId);
         if (s == null || token == null) return null;
         synchronized (s) {
             if (!token.equals(s.getAdminOfferToken())) return null;
@@ -277,7 +320,7 @@ public class SessionService {
      *  so stale timers are harmless.
      *  @return the token now offered admin, or null if nothing changed. */
     public String lapseAdminOffer(String sessionId, String token, long nowMs) {
-        Session s = sessions.get(sessionId);
+        Session s = find(sessionId);
         if (s == null || token == null) return null;
         synchronized (s) {
             if (!token.equals(s.getAdminOfferToken()) || nowMs < s.getAdminOfferDeadlineMs()) return null;
@@ -288,19 +331,20 @@ public class SessionService {
     /** Admin ended the room: it is marked ended (no more tickets or joins) and idles
      *  toward the normal reap, which alone deletes the durable snapshot. */
     public void disconnectAll(String sessionId) {
-        Session s = sessions.get(sessionId);
+        Session s = find(sessionId);
         if (s == null) return;
         synchronized (s) {
             s.markEnded();
             s.getActiveOrder().clear();
             clearAdminOffer(s);
             s.touch(System.currentTimeMillis());
+            save(s);
         }
     }
 
     /** Token currently holding the admin offer, or null. */
     public String adminOfferToken(String sessionId) {
-        Session s = sessions.get(sessionId);
+        Session s = find(sessionId);
         if (s == null) return null;
         synchronized (s) { return s.getAdminOfferToken(); }
     }
@@ -312,7 +356,7 @@ public class SessionService {
      * @return the token newly offered admin, otherwise null.
      */
     public String reofferVacantSeat(String sessionId) {
-        Session s = sessions.get(sessionId);
+        Session s = find(sessionId);
         if (s == null) return null;
         synchronized (s) {
             if (s.isEnded() || s.getAdminOfferToken() != null || s.getActiveOrder().isEmpty()
@@ -354,6 +398,8 @@ public class SessionService {
             }
         }
         reaped.forEach(sessions::remove);
+        reaped.forEach(repo::delete);
+        reaped.addAll(repo.reapIdle(nowMs - idleTtlMs, sessions.keySet()));
         if (!reaped.isEmpty()) log.info("Reaped {} idle session(s)", reaped.size());
         return reaped;
     }
