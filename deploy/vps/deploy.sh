@@ -16,10 +16,11 @@ if [[ "$conns" != "0" && $force -eq 0 ]]; then
 fi
 
 scp -q "$jar" "$HOST:/opt/codeshare/app.jar.new"
-ssh "$HOST" 'chown codeshare:codeshare /opt/codeshare/app.jar.new
-  && cp -p /opt/codeshare/app.jar /opt/codeshare/app.jar.prev 2>/dev/null
-  ; mv /opt/codeshare/app.jar.new /opt/codeshare/app.jar
-  && systemctl restart codeshare
-  && for i in $(seq 1 30); do sleep 3; curl -sf 127.0.0.1:9091/actuator/health && exit 0; done
-  ; echo "health check failed; roll back with: mv /opt/codeshare/app.jar.prev /opt/codeshare/app.jar && systemctl restart codeshare"; exit 1'
+ssh "$HOST" 'set -e
+chown codeshare:codeshare /opt/codeshare/app.jar.new
+cp -p /opt/codeshare/app.jar /opt/codeshare/app.jar.prev 2>/dev/null || true
+mv /opt/codeshare/app.jar.new /opt/codeshare/app.jar
+systemctl restart codeshare
+for i in $(seq 1 30); do sleep 3; curl -sf 127.0.0.1:9091/actuator/health && exit 0; done
+echo "health check failed; roll back with: mv /opt/codeshare/app.jar.prev /opt/codeshare/app.jar && systemctl restart codeshare"; exit 1'
 echo; echo "deployed $(basename "$jar") ($(date +%H:%M))"
