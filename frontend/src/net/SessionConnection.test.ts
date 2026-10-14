@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Op } from "../ot/ops";
 
+class ApiError extends Error {
+  constructor(readonly status: number) { super(`http ${status}`); }
+}
 const mintTicket = vi.fn(async () => ({ ticket: "tk", ttlSeconds: 30 }));
-vi.mock("../api/client", () => ({ mintTicket, ApiError: class extends Error {} }));
+vi.mock("../api/client", () => ({ mintTicket, ApiError }));
 
 const RECONNECT_WAIT_MS = 2_000; // first backoff step is <= 1s (with jitter)
 
@@ -39,6 +42,7 @@ describe("SessionConnection auto-reconnect", () => {
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal("location", { protocol: "http:", host: "localhost" });
+    vi.stubGlobal("window", new EventTarget());
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -51,9 +55,10 @@ describe("SessionConnection auto-reconnect", () => {
     const onReconnecting = vi.fn();
     const onKicked = vi.fn();
     const onWaiting = vi.fn();
+    const onUnavailable = vi.fn();
     const onHostStatus = vi.fn();
     // Every other handler is a no-op.
-    const handlers = new Proxy({ onReconnecting, onKicked, onWaiting, onHostStatus }, { get: (t, k) => (t as Record<string | symbol, unknown>)[k] ?? (() => {}) });
+    const handlers = new Proxy({ onReconnecting, onKicked, onWaiting, onHostStatus, onUnavailable }, { get: (t, k) => (t as Record<string | symbol, unknown>)[k] ?? (() => {}) });
     const conn = new SessionConnection(
       { sessionId: "S", clientId: "c1", name: "A", color: "#fff", token: "tok" },
       handlers as never,
@@ -70,7 +75,7 @@ describe("SessionConnection auto-reconnect", () => {
     });
     conn.connect();
     await vi.advanceTimersByTimeAsync(0);
-    return { conn, doc, first: FakeWebSocket.instances[0], onReconnecting, onKicked, onWaiting, onHostStatus };
+    return { conn, doc, first: FakeWebSocket.instances[0], onReconnecting, onKicked, onWaiting, onHostStatus, onUnavailable };
   }
 
   async function reconnect() {
@@ -166,6 +171,25 @@ describe("SessionConnection auto-reconnect", () => {
     expect(onWaiting).toHaveBeenCalledWith("tok", false);
     first.deliver({ type: "hostStatus", online: true });
     expect(onHostStatus).toHaveBeenCalledWith(true);
+  });
+
+  it("retries when the first ticket request hits a restarting server, instead of 'not found'", async () => {
+    mintTicket.mockRejectedValueOnce(new ApiError(503));
+    const { onUnavailable, onReconnecting } = await setup();
+    expect(onUnavailable).not.toHaveBeenCalled();
+    expect(onReconnecting).toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(RECONNECT_WAIT_MS);
+    expect(FakeWebSocket.instances).toHaveLength(1); // the retry got a ticket and dialed
+  });
+
+  it("retries immediately when the browser comes back online", async () => {
+    const { first } = await setup();
+    first.deliver({ type: "init", document: "", version: 0, token: "tok", role: "JOINER" });
+    drop(first);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
   it("splits a huge paste into frames under the server cap", async () => {

@@ -81,8 +81,14 @@ export function detectLanguage(code: string): DetectedLanguage {
     id = undefined;
   }
   if (!id) return PLAIN;
+  // highlight.js scores Java as TypeScript surprisingly often (shared syntax, no
+  // type annotations to tip it). Java's package/import lines or a typed main
+  // method are unambiguous, so trust them over the score.
+  if ((id === "typescript" || id === "javascript") && JAVA_TELLS.test(code.slice(0, DETECT_SAMPLE))) id = "java";
   return languageFor(id);
 }
+
+const JAVA_TELLS = /^\s*(package|import)\s+[\w.]+;|\bpublic\s+static\s+void\s+main\s*\(|\bSystem\.out\.print/m;
 
 /** xml grammar also covers HTML; this returns a stable extension for the id. */
 export function languageExtensionFor(id: string): Extension {

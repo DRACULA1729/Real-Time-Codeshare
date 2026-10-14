@@ -31,7 +31,7 @@ export function ActionsPopover({ onClose }: { onClose: () => void }) {
   const storedFileName = useSessionStore((s) => s.fileName);
   const role = useSessionStore((s) => s.role);
 
-  const [filename, setFilename] = useState(storedFileName || sessionId || "code");
+  const [filename, setFilename] = useState(storedFileName || "untitled");
   const [status, setStatus] = useState<GitHubStatus | "loading" | "error">("loading");
   const justConnected = new URLSearchParams(location.search).get("github") === "connected";
 
@@ -47,7 +47,7 @@ export function ActionsPopover({ onClose }: { onClose: () => void }) {
     github.status().then(setStatus).catch(() => setStatus("error"));
   }, []);
 
-  const base = () => filename.trim() || sessionId || "code";
+  const base = () => filename.trim() || storedFileName || "untitled";
   const rawName = () => (base().includes(".") ? base() : `${base()}.${ext}`);
 
   function downloadRaw() {

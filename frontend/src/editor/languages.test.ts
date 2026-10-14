@@ -59,3 +59,16 @@ describe("detectLanguage", () => {
     expect(performance.now() - t0).toBeLessThan(1000);
   });
 });
+
+it("reads a plain Java class as Java, not TypeScript", () => {
+  const java = `package demo;
+import java.util.List;
+public class Main {
+  public static void main(String[] args) {
+    List<String> xs = List.of("a", "b");
+    for (String x : xs) { System.out.println(x); }
+  }
+}
+`;
+  expect(detectLanguage(java).id).toBe("java");
+});

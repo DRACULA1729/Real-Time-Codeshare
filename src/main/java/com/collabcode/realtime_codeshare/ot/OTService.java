@@ -456,6 +456,15 @@ public class OTService {
          * @throws ResyncRequiredException if the op's base version is below the
          *         compaction floor, where the history needed to transform it is gone.
          */
+        /** An op that lands between the halves of a surrogate pair would leave a lone
+         *  surrogate in every copy (CodeMirror counts UTF-16 units too, so a sane client
+         *  never does this). Reject it like CR: the sender gets nack + forced resync. */
+        private void requireCodePointBoundary(int pos) {
+            if (pos > 0 && pos < doc.length()
+                    && Character.isHighSurrogate(doc.charAt(pos - 1)) && Character.isLowSurrogate(doc.charAt(pos)))
+                throw new InvalidOpException("op position " + pos + " splits a surrogate pair");
+        }
+
         public synchronized ApplyResult commit(Op incoming) {
             int base = incoming.getBaseVersion();
             if (base > version.get()) {
@@ -475,10 +484,16 @@ public class OTService {
 
             if (transformed instanceof InsertOp i) {
                 int p = Math.max(0, Math.min(i.getPos(), doc.length()));
-                doc.insert(p, i.getText());
+                requireCodePointBoundary(p);
+                String t = i.getText();
+                if (Character.isLowSurrogate(t.charAt(0)) || Character.isHighSurrogate(t.charAt(t.length() - 1)))
+                    throw new InvalidOpException("insert text starts or ends inside a surrogate pair");
+                doc.insert(p, t);
             } else if (transformed instanceof DeleteOp d) {
                 int p = Math.max(0, Math.min(d.getPos(), doc.length()));
                 int end = Math.max(p, Math.min(doc.length(), p + d.getLength()));
+                requireCodePointBoundary(p);
+                requireCodePointBoundary(end);
                 if (end > p) doc.delete(p, end);
             }
 

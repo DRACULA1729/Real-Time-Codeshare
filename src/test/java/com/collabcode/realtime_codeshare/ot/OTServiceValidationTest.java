@@ -34,6 +34,18 @@ class OTServiceValidationTest {
     }
 
     @Test
+    void opsThatSplitASurrogatePair_rejected() {
+        OTService svc = new OTService(new com.collabcode.realtime_codeshare.persistence.InMemoryDocumentRepository());
+        svc.applyOp("room", op("a", "insert", 0, 0, "x\uD83D\uDE00y", null)); // x😀y, emoji at UTF-16 1..2
+        assertThrows(InvalidOpException.class, () -> svc.applyOp("room", op("a", "delete", 1, 2, null, 1)));
+        assertThrows(InvalidOpException.class, () -> svc.applyOp("room", op("a", "delete", 1, 1, null, 1)));
+        assertThrows(InvalidOpException.class, () -> svc.applyOp("room", op("a", "insert", 1, 2, "!", null)));
+        assertThrows(InvalidOpException.class, () -> svc.applyOp("room", op("a", "insert", 1, 0, "\uDE00", null)));
+        svc.applyOp("room", op("a", "delete", 1, 1, null, 2)); // the whole emoji is fine
+        assertEquals("xy", svc.getDocument("room"));
+    }
+
+    @Test
     void baseVersionAheadOfTheDocument_rejected() {
         OTService svc = new OTService(new com.collabcode.realtime_codeshare.persistence.InMemoryDocumentRepository());
         svc.applyOp("room", op("a", "insert", 0, 0, "x", null));
