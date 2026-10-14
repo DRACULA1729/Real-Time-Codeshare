@@ -13,7 +13,7 @@ class FakeWebSocket {
   sent: unknown[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((ev: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((ev: { reason: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   constructor(readonly url: string) {
     FakeWebSocket.instances.push(this);
@@ -28,9 +28,9 @@ class FakeWebSocket {
 }
 
 const op = (clientId: string, pos: number, text: string) => ({ type: "INSERT", clientId, pos, text });
-const drop = (ws: FakeWebSocket) => {
+const drop = (ws: FakeWebSocket, reason = "") => {
   ws.readyState = 3;
-  ws.onclose?.();
+  ws.onclose?.({ reason });
 };
 const inserts = (ws: FakeWebSocket) => ws.sent.filter((m) => (m as { type: string }).type === "insert") as { text: string }[];
 
@@ -49,8 +49,9 @@ describe("SessionConnection auto-reconnect", () => {
   async function setup() {
     const { SessionConnection } = await import("./SessionConnection");
     const onReconnecting = vi.fn();
+    const onKicked = vi.fn();
     // Every other handler is a no-op.
-    const handlers = new Proxy({ onReconnecting }, { get: (t, k) => (t as Record<string | symbol, unknown>)[k] ?? (() => {}) });
+    const handlers = new Proxy({ onReconnecting, onKicked }, { get: (t, k) => (t as Record<string | symbol, unknown>)[k] ?? (() => {}) });
     const conn = new SessionConnection(
       { sessionId: "S", clientId: "c1", name: "A", color: "#fff", token: "tok" },
       handlers as never,
@@ -67,7 +68,7 @@ describe("SessionConnection auto-reconnect", () => {
     });
     conn.connect();
     await vi.advanceTimersByTimeAsync(0);
-    return { conn, doc, first: FakeWebSocket.instances[0], onReconnecting };
+    return { conn, doc, first: FakeWebSocket.instances[0], onReconnecting, onKicked };
   }
 
   async function reconnect() {
@@ -145,6 +146,16 @@ describe("SessionConnection auto-reconnect", () => {
     first.deliver({ type: "nack", reason: "rate" });
     await vi.advanceTimersByTimeAsync(500);
     expect(inserts(first)).toHaveLength(2);
+  });
+
+  it("treats a close whose reason is 'kicked' like the kicked message, with no reconnect", async () => {
+    const { first, onReconnecting, onKicked } = await setup();
+    first.deliver({ type: "init", document: "", version: 0, token: "tok", role: "JOINER" });
+    drop(first, "kicked");
+    expect(onKicked).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(RECONNECT_WAIT_MS);
+    expect(onReconnecting).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
   it("splits a huge paste into frames under the server cap", async () => {

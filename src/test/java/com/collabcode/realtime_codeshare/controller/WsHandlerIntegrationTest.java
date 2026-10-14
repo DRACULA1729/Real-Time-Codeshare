@@ -56,6 +56,11 @@ class WsHandlerIntegrationTest {
         public void handleTextMessage(WebSocketSession s, TextMessage m) {
             q.add(m.getPayload());
         }
+        @Override
+        public void afterConnectionClosed(WebSocketSession s, CloseStatus status) {
+            // A terminal type may arrive only as the close reason (see closeAll).
+            if (status.getReason() != null) q.add("{\"type\":\"" + status.getReason() + "\"}");
+        }
     }
 
     private WebSocketSession connect(String sid, String clientId, String name, String ticket, Collector c) throws Exception {

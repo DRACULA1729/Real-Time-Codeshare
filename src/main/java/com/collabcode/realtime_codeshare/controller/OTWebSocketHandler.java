@@ -438,7 +438,7 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         for (WebSocketSession s : room.values()) {
             if (token.equals(attr(s, ATTR_TOKEN))) {
                 sendJson(s, Map.of("type", "kicked"));
-                closeQuietly(s, CloseStatus.POLICY_VIOLATION);
+                closeQuietly(s, CloseStatus.POLICY_VIOLATION.withReason("kicked"));
             }
         }
         log.info("Session {}: kicked {}", sessionId, targetClientId);
@@ -667,11 +667,14 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    // The type also rides the close frame: the decorator drops a buffered text frame
+    // if another thread is mid-write to that socket when close() lands, so the message
+    // alone can be lost. The client honors either.
     private void closeAll(Map<String, WebSocketSession> sockets, String type) {
         if (sockets == null) return;
         for (WebSocketSession s : sockets.values()) {
             sendJson(s, Map.of("type", type));
-            closeQuietly(s, CloseStatus.NORMAL);
+            closeQuietly(s, CloseStatus.NORMAL.withReason(type));
         }
     }
 

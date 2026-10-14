@@ -144,7 +144,7 @@ export class SessionConnection {
     ws.onopen = () => this.startHeartbeat();
     ws.onmessage = (ev) => this.onMessage(ev);
     ws.onerror = (e) => console.error("WS error", e);
-    ws.onclose = () => this.onClose();
+    ws.onclose = (ev) => this.onClose(ev.reason);
   }
 
   // App-level ping; any inbound frame proves liveness. A whole interval with no
@@ -345,16 +345,18 @@ export class SessionConnection {
         this.h.onAdminOffer(false);
         break;
       case "kicked":
-        this.denied = true;
-        this.admitted = false;
-        this.h.onKicked();
-        break;
       case "sessionEnded":
-        this.denied = true;
-        this.admitted = false;
-        this.h.onSessionEnded();
+        this.terminal(msg.type);
         break;
     }
+  }
+
+  private terminal(type: "kicked" | "sessionEnded"): void {
+    if (this.denied) return;
+    this.denied = true;
+    this.admitted = false;
+    if (type === "kicked") this.h.onKicked();
+    else this.h.onSessionEnded();
   }
 
   // Two resync flavors:
@@ -426,7 +428,10 @@ export class SessionConnection {
     }, PROBE_DELAY_MS);
   }
 
-  private onClose(): void {
+  // The server also puts the terminal type in the close reason, because the
+  // text frame can be dropped if the socket was mid-write when it was closed.
+  private onClose(reason = ""): void {
+    if (reason === "kicked" || reason === "sessionEnded") this.terminal(reason);
     this.stopTimers();
     this.ws = null;
     if (this.intentionalClose || this.denied) return; // user left, or terminal state already surfaced
