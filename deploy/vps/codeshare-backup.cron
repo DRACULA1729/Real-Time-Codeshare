@@ -1,0 +1,1 @@
+30 2 * * * postgres pg_dump codeshare | gzip > /var/backups/codeshare/codeshare-$(date +\%F).sql.gz && ls -1t /var/backups/codeshare/*.sql.gz | tail -n +15 | xargs -r rm --

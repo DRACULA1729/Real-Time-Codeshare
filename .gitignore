@@ -1,0 +1,30 @@
+# Build output
+target/
+build/
+out/
+
+# Frontend build output — the React SPA is produced fresh by the Maven
+# frontend-maven-plugin into the Spring Boot static dir; keep it out of git.
+src/main/resources/static/
+
+# Node
+node_modules/
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+.env.*
+
+# IDE / editor
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# OS
+.DS_Store
+deploy/backups/

@@ -1,0 +1,76 @@
+# By default the app is fully in-memory (single node) and needs no database or
+# Redis. The JPA/DataSource/Flyway/Redis auto-configs are excluded here and
+# re-enabled only by the `postgres` / `redis` scale profiles.
+spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+
+server:
+  port: 8080
+  # X-Forwarded-* is intentionally NOT trusted by default: a directly-exposed
+  # instance must not let a client spoof its IP (which would bypass the per-IP
+  # session-create rate limit) or its scheme. The prod profile turns it on via
+  # Tomcat's RemoteIpValve, trusting only configured proxy ranges.
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        # secure is false here so local HTTP works; the prod profile sets it true.
+        secure: false
+
+codeshare:
+  # Comma-separated allowed Origin(s)/patterns for the WS upgrade. Defaults to
+  # localhost only; the dev profile adds the Vite port + ngrok wildcards, and prod
+  # requires operators to set CODESHARE_ALLOWED_ORIGINS to the exact origin.
+  allowed-origins: ${CODESHARE_ALLOWED_ORIGINS:http://localhost:8080}
+  session:
+    max-rejected-attempts: 3    # rejected joins per identity before a temporary block
+    ttl-minutes: 30
+    max-active: 10000           # global cap on live sessions (memory-DoS guard)
+    admin-offer-timeout-ms: 30000  # host left: time a member has to accept admin before it moves on
+  room:
+    idle-ttl-ms: 1800000        # reclaim empty rooms idle longer than 30 min
+  reaper:
+    interval-ms: 60000          # idle-room sweep cadence
+  persist:
+    dirty-interval-ms: 5000     # write-through cadence for edited rooms (crash-loss window)
+  rate:
+    ops-per-sec: 50             # per-connection op rate limit
+    cursors-per-sec: 30         # per-connection cursor rate limit (anti-amplification)
+    session-create-per-min: 20  # per-IP POST /api/sessions rate limit
+  ws:
+    max-message-bytes: 65536    # inbound frame size cap
+
+# Optional GitHub push. Empty client-id/secret => the push UI degrades gracefully.
+github:
+  client-id: ${GITHUB_CLIENT_ID:}
+  client-secret: ${GITHUB_CLIENT_SECRET:}
+  scope: ${GITHUB_OAUTH_SCOPE:public_repo}     # least privilege; override to "repo" for private repos
+  redirect-uri: ${GITHUB_REDIRECT_URI:http://localhost:8080/api/github/callback}
+  api-base: ${GITHUB_API_BASE:https://api.github.com}
+
+# Observability. By default only health + info are exposed on the main port, so a
+# directly-exposed instance never serves metrics/route-enumeration publicly. The
+# dev profile adds prometheus/metrics for local use; prod serves them on a separate
+# internal management port (see application-dev.yml / application-prod.yml).
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+logging:
+  level:
+    root: INFO
+    com.collabcode.realtime_codeshare: INFO   # set DEBUG locally for per-op trace

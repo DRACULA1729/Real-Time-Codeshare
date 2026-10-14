@@ -1,0 +1,26 @@
+# Local development convenience. Activate with: --spring.profiles.active=dev
+# Adds the Vite dev-server origin and ngrok tunnel wildcards for the WS upgrade.
+# Never enable this profile in production (the wildcard origins weaken the Origin
+# check against cross-site WebSocket hijacking).
+codeshare:
+  allowed-origins: >-
+    http://localhost:8080,
+    http://localhost:5173,
+    http://127.0.0.1:8080,
+    http://127.0.0.1:5173,
+    https://*.ngrok-free.app,
+    https://*.ngrok-free.dev,
+    https://*.ngrok.app,
+    https://*.ngrok.dev,
+    https://*.ngrok.io
+
+# Local convenience: expose metrics on the main port for inspection.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+
+logging:
+  level:
+    com.collabcode.realtime_codeshare: DEBUG

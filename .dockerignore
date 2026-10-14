@@ -1,0 +1,14 @@
+# Build outputs and local cruft — keep the build context small and reproducible.
+target/
+frontend/node_modules/
+frontend/dist/
+src/main/resources/static/assets/
+src/main/resources/static/index.html
+src/main/resources/static/theme-init.js
+.git/
+.gitignore
+.idea/
+*.iml
+.vscode/
+*.log
+.DS_Store
