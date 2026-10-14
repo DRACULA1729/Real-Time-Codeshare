@@ -48,6 +48,11 @@ export interface PresenceMsg {
 export interface WaitingMsg {
   type: "waitingForApproval";
   token: string;
+  hostOnline: boolean;
+}
+export interface HostStatusMsg {
+  type: "hostStatus";
+  online: boolean;
 }
 export interface JoinRequestMsg {
   type: "joinRequest";
@@ -107,6 +112,7 @@ export type WsInbound =
   | CursorRemoveMsg
   | PresenceMsg
   | WaitingMsg
+  | HostStatusMsg
   | JoinRequestMsg
   | JoinResolvedMsg
   | JoinDeniedMsg

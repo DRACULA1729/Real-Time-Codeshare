@@ -154,7 +154,8 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
                 pendingSockets.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>())
                         .put(raw.getId(), session);
                 touch(sessionId);
-                sendJson(session, Map.of("type", "waitingForApproval", "token", jr.token()));
+                sendJson(session, Map.of("type", "waitingForApproval", "token", jr.token(),
+                        "hostOnline", adminOnline(sessionId)));
                 notifyAdminsOfRequest(sessionId, jr.joinKey(), attr(raw, ATTR_NAME), attr(raw, ATTR_COLOR));
                 log.info("Session {}: {} pending approval", sessionId, clientId);
             }
@@ -186,7 +187,10 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
                 "language", otService.getLanguage(sessionId)
         ));
         broadcastPresence(sessionId);
-        if (sessionService.isAdmin(sessionId, token)) sendPendingListTo(session, sessionId);
+        if (sessionService.isAdmin(sessionId, token)) {
+            sendPendingListTo(session, sessionId);
+            notifyWaiters(sessionId, true);
+        }
         // After init (which resets the client's prompt): a reconnect must not lose an
         // offer it still holds, and a member arriving in a host-less room gets one.
         if (token != null && token.equals(sessionService.adminOfferToken(sessionId))) {
@@ -566,6 +570,25 @@ public class OTWebSocketHandler extends TextWebSocketHandler {
         broadcast(sessionId, json(Map.of("type", "adminChanged", "clientId", nullSafe(adminClientId))), null);
         broadcastPresence(sessionId);
         if (adminSocket != null) sendPendingListTo(adminSocket, sessionId);
+        notifyWaiters(sessionId, true);
+    }
+
+    /** Is any admin socket open in the room? Waiters are told, so a guest who arrives
+     *  after the host closed the tab sees "the host isn't here" instead of a spinner. */
+    private boolean adminOnline(String sessionId) {
+        Map<String, WebSocketSession> room = roomClients.get(sessionId);
+        if (room == null) return false;
+        for (WebSocketSession s : room.values()) {
+            if (s.isOpen() && sessionService.isAdmin(sessionId, attr(s, ATTR_TOKEN))) return true;
+        }
+        return false;
+    }
+
+    private void notifyWaiters(String sessionId, boolean hostOnline) {
+        Map<String, WebSocketSession> waiting = pendingSockets.get(sessionId);
+        if (waiting == null) return;
+        TextMessage msg = new TextMessage(json(Map.of("type", "hostStatus", "online", hostOnline)));
+        for (WebSocketSession s : waiting.values()) if (s.isOpen()) trySend(s, msg, sessionId);
     }
 
     /** Ask a member to take the vacated admin seat and arm the lapse timer. */

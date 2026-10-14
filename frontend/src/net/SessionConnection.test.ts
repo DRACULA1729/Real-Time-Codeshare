@@ -50,8 +50,10 @@ describe("SessionConnection auto-reconnect", () => {
     const { SessionConnection } = await import("./SessionConnection");
     const onReconnecting = vi.fn();
     const onKicked = vi.fn();
+    const onWaiting = vi.fn();
+    const onHostStatus = vi.fn();
     // Every other handler is a no-op.
-    const handlers = new Proxy({ onReconnecting, onKicked }, { get: (t, k) => (t as Record<string | symbol, unknown>)[k] ?? (() => {}) });
+    const handlers = new Proxy({ onReconnecting, onKicked, onWaiting, onHostStatus }, { get: (t, k) => (t as Record<string | symbol, unknown>)[k] ?? (() => {}) });
     const conn = new SessionConnection(
       { sessionId: "S", clientId: "c1", name: "A", color: "#fff", token: "tok" },
       handlers as never,
@@ -68,7 +70,7 @@ describe("SessionConnection auto-reconnect", () => {
     });
     conn.connect();
     await vi.advanceTimersByTimeAsync(0);
-    return { conn, doc, first: FakeWebSocket.instances[0], onReconnecting, onKicked };
+    return { conn, doc, first: FakeWebSocket.instances[0], onReconnecting, onKicked, onWaiting, onHostStatus };
   }
 
   async function reconnect() {
@@ -156,6 +158,14 @@ describe("SessionConnection auto-reconnect", () => {
     await vi.advanceTimersByTimeAsync(RECONNECT_WAIT_MS);
     expect(onReconnecting).not.toHaveBeenCalled();
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("tells the waiting room whether a host is there, and updates when one arrives", async () => {
+    const { first, onWaiting, onHostStatus } = await setup();
+    first.deliver({ type: "waitingForApproval", token: "tok", hostOnline: false });
+    expect(onWaiting).toHaveBeenCalledWith("tok", false);
+    first.deliver({ type: "hostStatus", online: true });
+    expect(onHostStatus).toHaveBeenCalledWith(true);
   });
 
   it("splits a huge paste into frames under the server cap", async () => {

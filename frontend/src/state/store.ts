@@ -31,6 +31,7 @@ interface SessionState {
   deniedReason: string | null;
   reconnecting: boolean;
   adminOffer: boolean; // the host left and the seat is offered to us
+  hostOnline: boolean; // while waiting: is anyone there who could admit us?
   cursorLine: number;
   cursorCol: number;
 
@@ -47,6 +48,7 @@ interface SessionState {
   setConnection: (c: ConnectionState) => void;
   setDenied: (reason: string) => void;
   setAdminOffer: (v: boolean) => void;
+  setHostOnline: (v: boolean) => void;
   setFileName: (name: string) => void;
   setLanguage: (lang: string, ext: string) => void;
   setLanguageChoice: (id: string) => void;
@@ -73,6 +75,7 @@ const initial = {
   deniedReason: null as string | null,
   reconnecting: false,
   adminOffer: false,
+  hostOnline: true,
   cursorLine: 1,
   cursorCol: 1,
 };
@@ -98,6 +101,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   setConnection: (connection) => set({ connection }),
   setDenied: (reason) => set({ phase: "denied", deniedReason: reason, reconnecting: false }),
   setAdminOffer: (adminOffer) => set({ adminOffer }),
+  setHostOnline: (hostOnline) => set({ hostOnline }),
   setFileName: (fileName) => set({ fileName }),
   setLanguage: (language, languageExt) => set({ language, languageExt }),
   setLanguageChoice: (languageChoice) => set({ languageChoice }),

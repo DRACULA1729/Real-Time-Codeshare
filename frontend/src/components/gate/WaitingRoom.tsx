@@ -2,13 +2,24 @@ import { GateLayout } from "./GateLayout";
 import { LoaderRing } from "./LoaderRing";
 import { Icon } from "../ui/Icon";
 
-export function WaitingRoom({ sessionId, onCancel }: { sessionId: string; onCancel: () => void }) {
+export function WaitingRoom({ sessionId, hostOnline, onCancel }: { sessionId: string; hostOnline: boolean; onCancel: () => void }) {
   return (
     <GateLayout>
       <div className="mx-auto flex w-full max-w-[440px] flex-col items-center rounded-xl border border-border-subtle bg-surface-raised p-10 text-center">
         <LoaderRing />
-        <h1 className="mt-6 text-headline-md text-text-primary">Waiting for the host to let you in…</h1>
-        <p className="mt-2 text-body-lg text-text-muted">This can take a moment.</p>
+        {hostOnline ? (
+          <>
+            <h1 className="mt-6 text-headline-md text-text-primary">Waiting for the host to let you in…</h1>
+            <p className="mt-2 text-body-lg text-text-muted">This can take a moment.</p>
+          </>
+        ) : (
+          <>
+            <h1 className="mt-6 text-headline-md text-text-primary">The host isn&apos;t here right now</h1>
+            <p className="mt-2 text-body-lg text-text-muted">
+              Keep this tab open and you&apos;ll be let in when they return, or ask them to reopen the session link.
+            </p>
+          </>
+        )}
 
         <div className="my-7 h-px w-full bg-border-subtle" />
 

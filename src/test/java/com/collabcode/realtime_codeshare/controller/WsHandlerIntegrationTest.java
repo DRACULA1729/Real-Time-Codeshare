@@ -365,6 +365,30 @@ class WsHandlerIntegrationTest {
     }
 
     @Test
+    void waiterIsToldWhetherTheHostIsOnline() throws Exception {
+        Session session = sessionService.createSession("Host", "#7aa2f7");
+        String sid = session.getSessionId();
+        // Guest arrives first: the host closed the tab after sharing the link.
+        Collector g = new Collector();
+        connect(sid, "g", "Guest", ticketStore.issue(sid, null, "g"), g);
+        JsonNode waiting = waitFor(g, "waitingForApproval");
+        assertThat(waiting).isNotNull();
+        assertThat(waiting.path("hostOnline").asBoolean(true)).as("no host socket yet").isFalse();
+        // Host comes back: the waiter learns it without reconnecting.
+        Collector hostC = new Collector();
+        WebSocketSession host = connect(sid, "host", "Host", ticketStore.issue(sid, session.getCreatorToken(), "host"), hostC);
+        assertThat(waitFor(hostC, "init")).isNotNull();
+        JsonNode status = waitFor(g, "hostStatus");
+        assertThat(status).isNotNull();
+        assertThat(status.path("online").asBoolean(false)).isTrue();
+        // And a guest arriving while the host is present is told so up front.
+        Collector g2 = new Collector();
+        connect(sid, "g2", "Guest2", ticketStore.issue(sid, null, "g2"), g2);
+        assertThat(waitFor(g2, "waitingForApproval").path("hostOnline").asBoolean(false)).isTrue();
+        host.close(CloseStatus.NORMAL);
+    }
+
+    @Test
     void pingIsAnsweredWithPong() throws Exception {
         Session session = sessionService.createSession("Host", "#7aa2f7");
         String sid = session.getSessionId();
