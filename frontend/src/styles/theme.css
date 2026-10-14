@@ -101,3 +101,11 @@
 
   color-scheme: dark;
 }
+
+/* The native <select> popup is painted by the browser from the control's own
+   colors. With a transparent select it falls back to a white popup while the
+   options inherit our muted light text, which is unreadable in dark mode. */
+select option {
+  background: rgb(var(--surface-raised));
+  color: rgb(var(--text-primary));
+}

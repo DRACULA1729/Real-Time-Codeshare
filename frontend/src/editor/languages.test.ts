@@ -104,3 +104,17 @@ int main(void) { printf("hi\\n"); return 0; }
 `;
   expect(["c", "cpp"]).toContain(detectLanguage(c).id);
 });
+
+it("treats chat prose as plain text instead of naming a random language", () => {
+  const prose = `is the theme light on your screen? nope, dark here
+this means personalisation works!! indeed it does
+find me a new bug, you are the man of taste! please test
+yeh bta jhn pe c sharp auto likha h neeche why the options are so transparent
+`;
+  expect(detectLanguage(prose).id).toBe("plaintext");
+});
+
+it("still detects short real code", () => {
+  expect(detectLanguage('print("hello")\n').id).toBe("python");
+  expect(detectLanguage("SELECT id, name FROM users WHERE active = 1;\n").id).toBe("sql");
+});
