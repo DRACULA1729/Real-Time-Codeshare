@@ -5,7 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_DIR="$SCRIPT_DIR/realtime-codeshare"
+APP_DIR="$SCRIPT_DIR"
 JAR="$APP_DIR/target/realtime-codeshare-0.0.1-SNAPSHOT.jar"
 FRONTEND_DIR="$APP_DIR/frontend"
 

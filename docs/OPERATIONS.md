@@ -18,7 +18,6 @@ swap in the scale phase.
 ## Build & run
 
 ```bash
-cd realtime-codeshare
 
 # Full build: downloads Node, builds the SPA, runs Java + TS tests, makes the JAR.
 ./mvnw clean verify

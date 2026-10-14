@@ -4,7 +4,7 @@ Live at https://sushant-codeshare.duckdns.org on a shared 1 vCPU / 4 GB Ubuntu 2
 behind OpenLiteSpeed. The server address and root access are not in this repo:
 use the `codeshare-vps` ssh alias from `~/.ssh/config`. Nothing under `/usr/local/lsws/api/` or
 `/usr/local/lsws/Example/` is ours; do not touch them.
-For the Docker + Caddy variant (own VM, e.g. Oracle) see `../DEPLOY.md`.
+For the Docker + Caddy variant (own VM, e.g. Oracle) see `../../docs/DEPLOY.md`.
 
 ## What lives where
 

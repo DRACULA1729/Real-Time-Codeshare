@@ -71,7 +71,7 @@ the app pings every few seconds.
 ```sh
 sudo mkdir -p /opt/codeshare && sudo chown ubuntu /opt/codeshare
 git clone https://github.com/DRACULA1729/Real-Time-Codeshare.git /opt/codeshare
-cd /opt/codeshare/realtime-codeshare/deploy
+cd /opt/codeshare/deploy
 cp env.example .env && nano .env     # PUBLIC_HOST, DB_PASSWORD (openssl rand -hex 24)
 docker compose up -d --build         # first build ~10 min on 2 OCPU
 docker compose logs -f app           # wait for "Started RealtimeCodeshareApplication"
@@ -82,7 +82,7 @@ Then open `https://<PUBLIC_HOST>`. Health: `https://<PUBLIC_HOST>/actuator/healt
 Update:
 
 ```sh
-cd /opt/codeshare && git pull && cd realtime-codeshare/deploy
+cd /opt/codeshare && git pull && cd deploy
 docker compose up -d --build && docker image prune -f
 ```
 
@@ -92,7 +92,7 @@ Documents live in Postgres and survive redeploys. Session registries are in memo
 
 ## 5. Backups and monitoring
 
-- Backup: `crontab -e` → `30 2 * * * /opt/codeshare/realtime-codeshare/deploy/backup.sh >> /var/log/codeshare-backup.log 2>&1`.
+- Backup: `crontab -e` → `30 2 * * * /opt/codeshare/deploy/backup.sh >> /var/log/codeshare-backup.log 2>&1`.
   For off-site copies install rclone and configure a remote named `r2` (Cloudflare
   R2, 10 GB free); the script picks it up automatically.
   Restore: `zcat backups/<file> | docker compose exec -T db psql -U codeshare codeshare`.

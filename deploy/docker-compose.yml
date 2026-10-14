@@ -1,6 +1,6 @@
 # Single-VM production stack: Caddy (TLS + reverse proxy) -> app -> Postgres.
 # Run from this directory: `docker compose up -d --build`. Secrets come from ./.env
-# (copy env.example). See DEPLOY.md.
+# (copy env.example). See docs/DEPLOY.md.
 services:
   app:
     build:

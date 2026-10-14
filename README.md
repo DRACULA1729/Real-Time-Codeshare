@@ -8,6 +8,18 @@ frontend libraries are bundled locally, so it works with no internet at all.
 Access works like Google Meet: the host creates a session, gets an unguessable link,
 and lets people in from a waiting room. There is no account to sign up for.
 
+Live instance: https://sushant-codeshare.duckdns.org
+
+## Repository layout
+
+```
+src/        Spring Boot backend: OT engine, sessions, WebSocket handler, REST API
+frontend/   React + TypeScript SPA (Vite, CodeMirror 6); built into the jar by Maven
+deploy/     Production bundles: docker compose + Caddy, and the no-Docker VPS variant
+docs/       OPERATIONS.md (running it), SCALE.md (multi-node), DEPLOY.md (own VM)
+start.sh    One-command local run (`./start.sh` prod, `./start.sh dev` with Vite HMR)
+```
+
 ## Requirements
 
 - JDK 21
@@ -16,9 +28,11 @@ and lets people in from a waiting room. There is no account to sign up for.
 ## Run
 
 ```bash
-cd realtime-codeshare
-./mvnw spring-boot:run
+./start.sh          # builds the jar on first run, serves on http://localhost:8080
+./start.sh dev      # backend on :8080 plus Vite HMR on :5173
 ```
+
+Or `./mvnw spring-boot:run` for the backend alone.
 
 Open http://localhost:8080, create a session, and share the invite link. Joiners land
 in the waiting room until the host admits them. Approved users keep a token so a
@@ -28,12 +42,14 @@ longest-present remaining member.
 ## Test
 
 ```bash
-cd realtime-codeshare
-./mvnw test
+./mvnw verify                 # backend + frontend suites (what CI runs)
+cd frontend && npm test       # frontend only
 ```
 
-The suite covers the OT transforms, commit atomicity, input validation, multi-order
-convergence, a concurrency stress run, and the session access-control state machine.
+The backend suite covers the OT transforms, commit atomicity, input validation,
+multi-order convergence, a concurrency stress run, and the session access-control
+state machine. The frontend suite covers the client OT loop, reconnect and catch-up,
+and language detection.
 
 ## Configuration
 
@@ -65,3 +81,13 @@ export GITHUB_REDIRECT_URI=http://localhost:8080/api/github/callback
 ```
 
 Without these the app still runs; the push panel just shows that GitHub isn't configured.
+
+## Production
+
+- [docs/OPERATIONS.md](docs/OPERATIONS.md): profiles, environment, Postgres and Redis,
+  health and metrics, what to put in front of it.
+- [docs/DEPLOY.md](docs/DEPLOY.md) with [deploy/](deploy/): docker compose
+  (app + Postgres + Caddy with automatic TLS) for a dedicated VM.
+- [deploy/vps/](deploy/vps/): the no-Docker variant for a shared server
+  (systemd + host Postgres + an existing web server as reverse proxy).
+- [docs/SCALE.md](docs/SCALE.md): what changes for more than one instance.

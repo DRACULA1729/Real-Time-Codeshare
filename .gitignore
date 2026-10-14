@@ -5,7 +5,7 @@ out/
 
 # Frontend build output — the React SPA is produced fresh by the Maven
 # frontend-maven-plugin into the Spring Boot static dir; keep it out of git.
-realtime-codeshare/src/main/resources/static/
+src/main/resources/static/
 
 # Node
 node_modules/
@@ -27,4 +27,4 @@ node_modules/
 
 # OS
 .DS_Store
-realtime-codeshare/deploy/backups/
+deploy/backups/

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Nightly pg_dump; keeps 14 local copies and, if rclone has an "r2" remote, pushes off-site.
-# cron: 30 2 * * * /opt/codeshare/realtime-codeshare/deploy/backup.sh >> /var/log/codeshare-backup.log 2>&1
+# cron: 30 2 * * * /opt/codeshare/deploy/backup.sh >> /var/log/codeshare-backup.log 2>&1
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p backups
