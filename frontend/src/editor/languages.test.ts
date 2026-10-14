@@ -72,3 +72,35 @@ public class Main {
 `;
   expect(detectLanguage(java).id).toBe("java");
 });
+
+it("detects on the code lines when a document is mostly comments", () => {
+  const chatty = Array.from({ length: 30 }, (_, i) => `# chat line ${i} about nothing in particular`).join("\n");
+  const java = `${chatty}
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.List;
+
+List<String> lines = Files.readAllLines(Paths.get("file.txt"));
+`;
+  expect(detectLanguage(java).id).toBe("java");
+});
+
+it("still reads a mostly-comment script from the whole text", () => {
+  const py = `# This script does one thing.
+# It is documented far more than it is written.
+# Run it with python3.
+# It prints a greeting.
+print("hello")
+`;
+  expect(detectLanguage(py).id).toBe("python");
+});
+
+it("keeps preprocessor lines as code when stripping comments", () => {
+  const c = `// utilities
+// more notes
+#include <stdio.h>
+#include <stdlib.h>
+int main(void) { printf("hi\\n"); return 0; }
+`;
+  expect(["c", "cpp"]).toContain(detectLanguage(c).id);
+});

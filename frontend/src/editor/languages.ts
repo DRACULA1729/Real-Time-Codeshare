@@ -71,20 +71,35 @@ export function languageFor(id: string): DetectedLanguage {
 // edit). The head of a file identifies its language; 2,000 chars stays ~50ms worst case.
 const DETECT_SAMPLE = 2000;
 
+// Comment lines say almost nothing about the language ("#" is Python, Ruby, shell,
+// YAML, Tantu...), yet a chatty document full of them drowns out the few lines of
+// real code. Detect on the code lines when there are enough of them; otherwise
+// (a script that is mostly comments) fall back to the whole text. Preprocessor
+// lines (#include, #define, #pragma) and a shebang are code, not comments.
+const COMMENT_LINE = /^\s*(#(?!(include|define|pragma|if|ifdef|ifndef|endif|else|elif|!)\b)|\/\/|--|\/\*|\*)/;
+const MIN_CODE = { lines: 2, chars: 40 };
+
+function codeOnly(sample: string): string {
+  const lines = sample.split("\n").filter((l) => l.trim() && !COMMENT_LINE.test(l));
+  const code = lines.join("\n");
+  return lines.length >= MIN_CODE.lines && code.length >= MIN_CODE.chars ? code : sample;
+}
+
 /** Auto-detect the language of `code` (mirrors the legacy hljs.highlightAuto). */
 export function detectLanguage(code: string): DetectedLanguage {
   if (!code.trim()) return PLAIN;
+  const sample = codeOnly(code.slice(0, DETECT_SAMPLE));
   let id: string | undefined;
   try {
-    id = hljs.highlightAuto(code.slice(0, DETECT_SAMPLE), SUBSET).language;
+    id = hljs.highlightAuto(sample, SUBSET).language;
   } catch {
     id = undefined;
   }
   if (!id) return PLAIN;
   // highlight.js scores Java as TypeScript surprisingly often (shared syntax, no
   // type annotations to tip it). Java's package/import lines or a typed main
-  // method are unambiguous, so trust them over the score.
-  if ((id === "typescript" || id === "javascript") && JAVA_TELLS.test(code.slice(0, DETECT_SAMPLE))) id = "java";
+  // method are unambiguous, so trust them over any score.
+  if (id !== "java" && JAVA_TELLS.test(sample)) id = "java";
   return languageFor(id);
 }
 
