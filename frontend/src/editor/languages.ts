@@ -88,7 +88,11 @@ function codeOnly(sample: string): string {
 /** Auto-detect the language of `code` (mirrors the legacy hljs.highlightAuto). */
 export function detectLanguage(code: string): DetectedLanguage {
   if (!code.trim()) return PLAIN;
-  const sample = codeOnly(code.slice(0, DETECT_SAMPLE));
+  const head = code.slice(0, DETECT_SAMPLE);
+  // highlight.js always names a winner, even for chat. Code in every listed
+  // language is dense with punctuation; prose is not. Below the line it's text.
+  if (!looksLikeCode(head)) return PLAIN;
+  const sample = codeOnly(head);
   let id: string | undefined;
   try {
     id = hljs.highlightAuto(sample, SUBSET).language;
@@ -101,6 +105,14 @@ export function detectLanguage(code: string): DetectedLanguage {
   // method are unambiguous, so trust them over any score.
   if (id !== "java" && JAVA_TELLS.test(sample)) id = "java";
   return languageFor(id);
+}
+
+const CODE_PUNCT = /[;{}()[\]=<>:#$*/\\|&@`]/g;
+const MIN_PUNCT_RATIO = 0.02;
+
+function looksLikeCode(text: string): boolean {
+  const punct = text.match(CODE_PUNCT)?.length ?? 0;
+  return punct / text.length >= MIN_PUNCT_RATIO;
 }
 
 const JAVA_TELLS = /^\s*(package|import)\s+[\w.]+;|\bpublic\s+static\s+void\s+main\s*\(|\bSystem\.out\.print/m;
