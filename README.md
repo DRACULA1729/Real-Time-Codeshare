@@ -91,3 +91,7 @@ Without these the app still runs; the push panel just shows that GitHub isn't co
 - [deploy/vps/](deploy/vps/): the no-Docker variant for a shared server
   (systemd + host Postgres + an existing web server as reverse proxy).
 - [docs/SCALE.md](docs/SCALE.md): what changes for more than one instance.
+
+## License
+
+Proprietary. All rights reserved. See [LICENSE](LICENSE): the source is viewable here for evaluation only, and may not be copied, modified, redistributed or deployed without written permission.
